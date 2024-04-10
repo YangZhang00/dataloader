@@ -29,8 +29,7 @@ package com.salesforce.dataloader.process;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Map;
@@ -62,7 +61,6 @@ import static org.junit.Assert.assertEquals;
 @RunWith(Parameterized.class)
 public class CsvEncodingProcessTest extends ProcessTestBase {
 
-    private static final String UTF8 = "UTF-8";
     private static final String JAPANESE = "Shift_JIS";
     private static final String FILE_ENCODING_SYSTEM_PROPERTY = "file.encoding";
     private final Map<String, String> config;
@@ -78,8 +76,8 @@ public class CsvEncodingProcessTest extends ProcessTestBase {
     @Parameterized.Parameters(name = "{0}, {1}")
     public static Collection<Object[]> getParameters() {
         return Arrays.asList(
-                TestVariant.builder().withSettings(TestSetting.BULK_API_ENABLED, TestSetting.WRITE_UTF8_ENABLED, TestSetting.READ_UTF8_ENABLED).withFileEncoding(UTF8).get(),
-                TestVariant.builder().withSettings(TestSetting.BULK_API_ENABLED, TestSetting.WRITE_UTF8_DISABLED, TestSetting.READ_UTF8_DISABLED).withFileEncoding(UTF8).get(),
+                TestVariant.builder().withSettings(TestSetting.BULK_API_ENABLED, TestSetting.WRITE_UTF8_ENABLED, TestSetting.READ_UTF8_ENABLED).withFileEncoding(StandardCharsets.UTF_8.name()).get(),
+                TestVariant.builder().withSettings(TestSetting.BULK_API_ENABLED, TestSetting.WRITE_UTF8_DISABLED, TestSetting.READ_UTF8_DISABLED).withFileEncoding(StandardCharsets.UTF_8.name()).get(),
                 TestVariant.builder().withSettings(TestSetting.BULK_API_ENABLED, TestSetting.WRITE_UTF8_ENABLED, TestSetting.READ_UTF8_ENABLED).withFileEncoding(JAPANESE).get()
 
                 //this one is suspect... how can we support the below condition (UTF8 language sent using disabled UTF8... this should blow up!)
@@ -90,20 +88,12 @@ public class CsvEncodingProcessTest extends ProcessTestBase {
     @Before
     public void overrideSystemFileEncoding() throws Exception {
         originalFileEncoding = System.getProperty(FILE_ENCODING_SYSTEM_PROPERTY);
-        setSystemFileEncoding(fileEncoding);
+        System.setProperty(FILE_ENCODING_SYSTEM_PROPERTY, this.fileEncoding);
     }
 
     @After
     public void restoreOriginalSystemFileEncoding() throws Exception {
-        setSystemFileEncoding(originalFileEncoding);
-    }
-
-    private void setSystemFileEncoding(String encoding) throws NoSuchFieldException, IllegalAccessException {
-        System.setProperty(FILE_ENCODING_SYSTEM_PROPERTY, encoding);
-        // following is necessary for new value to be properly read because default charset is cached
-        Field charset = Charset.class.getDeclaredField("defaultCharset");
-        charset.setAccessible(true);
-        charset.set(null, null);
+        System.setProperty(FILE_ENCODING_SYSTEM_PROPERTY, this.originalFileEncoding);
     }
 
     @Test
@@ -130,7 +120,7 @@ public class CsvEncodingProcessTest extends ProcessTestBase {
     private void validateExtraction(final String name, final Map<String, String> testConfig) throws IOException {
         FileInputStream fis = new FileInputStream(new File(testConfig.get(Config.DAO_NAME)));
         try {
-            CSVReader rdr = new CSVReader(fis, "UTF-8");
+            CSVReader rdr = new CSVReader(fis, StandardCharsets.UTF_8.name());
             int nameidx = rdr.nextRecord().indexOf("NAME");
             assertEquals(name, rdr.nextRecord().get(nameidx));
         } finally {

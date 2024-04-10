@@ -25,15 +25,13 @@
  */
 package com.salesforce.dataloader.mapping;
 
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 public class CaseInsensitiveSet {
-    private final HashMap<String, String> originalMap;
+    private final CaseInsensitiveMap originalMap = new CaseInsensitiveMap();
 
     public CaseInsensitiveSet(){
-        originalMap = new HashMap<String, String>();
     }
 
     public CaseInsensitiveSet(Set<String> values){
@@ -44,17 +42,15 @@ public class CaseInsensitiveSet {
     }
 
     public void add(String value) {
-        String lowerCase = value.toLowerCase();
-        originalMap.put(lowerCase, value);
+        originalMap.put(value, value);
     }
 
-    public boolean contains(String value) {
-        return value != null ? originalMap.containsKey(value.toLowerCase()): false;
-
+    public boolean containsKey(String key) {
+        return key != null ? originalMap.containsKey(key): false;
     }
 
-    public String getOriginal(String value){
-        return contains(value) ? (String) originalMap.get(value.toLowerCase()): value;
+    public String getOriginal(String key){
+        return containsKey(key) ? (String) originalMap.get(key): key;
     }
 
     public boolean isEmpty(){
@@ -62,6 +58,6 @@ public class CaseInsensitiveSet {
     }
 
     public Set<String> getOriginalValues() {
-        return new HashSet<String>(originalMap.values());
+        return new LinkedHashSet<String>(originalMap.values());
     }
 }

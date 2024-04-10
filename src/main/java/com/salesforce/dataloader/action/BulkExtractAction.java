@@ -27,7 +27,8 @@
 package com.salesforce.dataloader.action;
 
 import com.salesforce.dataloader.action.progress.ILoaderProgress;
-import com.salesforce.dataloader.action.visitor.BulkQueryVisitor;
+import com.salesforce.dataloader.action.visitor.BulkV1QueryVisitor;
+import com.salesforce.dataloader.action.visitor.BulkV2QueryVisitor;
 import com.salesforce.dataloader.action.visitor.IVisitor;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.exception.DataAccessObjectInitializationException;
@@ -47,7 +48,10 @@ class BulkExtractAction extends AbstractExtractAction {
 
     @Override
     protected IVisitor createVisitor() {
-        return new BulkQueryVisitor(getController(), getMonitor(), getDao(), getSuccessWriter(), getErrorWriter());
+    	if (getController().getConfig().isBulkV2APIEnabled() ) {
+    		return new BulkV2QueryVisitor(this, getController(), getMonitor(), getDao(), getSuccessWriter(), getErrorWriter());
+    	}
+        return new BulkV1QueryVisitor(this, getController(), getMonitor(), getDao(), getSuccessWriter(), getErrorWriter());
     }
 
 }

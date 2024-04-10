@@ -34,5 +34,10 @@ public interface ILoaderProgress {
     void worked(int worked);
     void setSubTask(String name);
     boolean isCanceled();
+    boolean isSuccess();
+    String getMessage();
     void setNumberBatchesTotal(int numberBatchesTotal);
+    int getNumberBatchesTotal();
+    void setNumberRowsWithError(int rowsWithError);
+    int getNumberRowsWithError();
 }

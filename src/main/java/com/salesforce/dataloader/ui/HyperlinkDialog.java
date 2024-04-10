@@ -26,14 +26,6 @@
 
 package com.salesforce.dataloader.ui;
 
-import java.awt.Desktop;
-import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
-
-import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.LogManager;
-
 import org.eclipse.jface.dialogs.IDialogConstants;
 import org.eclipse.jface.resource.JFaceColors;
 import org.eclipse.jface.resource.JFaceResources;
@@ -44,28 +36,13 @@ import org.eclipse.swt.layout.*;
 import org.eclipse.swt.widgets.*;
 
 import com.salesforce.dataloader.controller.Controller;
-import com.salesforce.dataloader.util.StreamGobbler;
 
-public class HyperlinkDialog extends Dialog {
+public class HyperlinkDialog extends BaseDialog {
     private String boldMessage;
-    private String message;
-    private String linkText;
-    private String linkURL;
-
-    public String getLinkURL() {
-        return linkURL;
-    }
-
-    public void setLinkURL(String linkURL) {
-        this.linkURL = linkURL;
-    }
-
-    private Logger logger = LogManager.getLogger(HyperlinkDialog.class);
-    private Text messageLabel;
     private Label titleLabel;
     private Label titleImage;
     private Label titleBanner;
-    private Hyperlink link;
+    private Link link;
 
     /**
      * InputDialog constructor
@@ -74,45 +51,7 @@ public class HyperlinkDialog extends Dialog {
      *            the parent
      */
     public HyperlinkDialog(Shell parent, Controller controller) {
-        this(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
-    }
-
-    /**
-     * InputDialog constructor
-     *
-     * @param parent
-     *            the parent
-     * @param style
-     *            the style
-     */
-    public HyperlinkDialog(Shell parent, int style) {
-        // Let users override the default styles
-        super(parent, style);
-
-    }
-
-    /**
-     * Opens the dialog and returns the input
-     *
-     * @return String
-     */
-    public boolean open() {
-        // Create the dialog window
-        Shell shell = new Shell(getParent(), getStyle());
-        shell.setText(getText());
-        shell.setImage(UIUtils.getImageRegistry().get("sfdc_icon")); //$NON-NLS-1$
-        createContents(shell);
-        shell.pack();
-        shell.open();
-        Display display = getParent().getDisplay();
-
-        while (!shell.isDisposed()) {
-            if (!display.readAndDispatch()) {
-                display.sleep();
-            }
-        }
-        // Return the sucess
-        return true;
+        super(parent, controller);
     }
 
     /**
@@ -121,7 +60,7 @@ public class HyperlinkDialog extends Dialog {
      * @param shell
      *            the dialog window
      */
-    private void createContents(final Shell shell) {
+    protected void createContents(final Shell shell) {
 
         FormLayout layout = new FormLayout();
         shell.setLayout(layout);
@@ -162,76 +101,24 @@ public class HyperlinkDialog extends Dialog {
         titleData.left = new FormAttachment(0, 10);
         titleLabel.setLayoutData(titleData);
 
-        messageLabel = new Text(shell, SWT.WRAP | SWT.READ_ONLY);
-        messageLabel.setForeground(foreground);
-        messageLabel.setBackground(background);
-        messageLabel.setText(message); // two lines
-        messageLabel.setFont(JFaceResources.getDialogFont());
+        link = new Link(shell, SWT.WRAP | SWT.READ_ONLY);
+        link.setForeground(foreground);
+        link.setBackground(background);
+        link.setText(this.getMessage()); // two lines
+        link.setFont(JFaceResources.getDialogFont());
         FormData messageLabelData = new FormData();
         messageLabelData.top = new FormAttachment(titleLabel, 10);
         messageLabelData.right = new FormAttachment(titleImage);
         messageLabelData.left = new FormAttachment(0, 10);
         //        messageLabelData.bottom = new FormAttachment(titleImage, 0, SWT.BOTTOM);
-        messageLabel.setLayoutData(messageLabelData);
-
-        link = new Hyperlink(shell, SWT.NONE);
-        link.setText(getLinkText());
-        link.setBackground(background);
-        link.addSelectionListener(new SelectionListener() {
+        link.setLayoutData(messageLabelData);   
+        link.addSelectionListener(new SelectionAdapter() {
             @Override
             public void widgetSelected(SelectionEvent e) {
-                Thread runner = new Thread() {
-                    @Override
-                    public void run() {
-                        int exitVal = 0;
-                        try {
-                            Process proc = null;
-                            if (System.getProperty("os.name").toLowerCase().indexOf("windows") >= 0)
-                                proc = Runtime.getRuntime().exec("rundll32 url.dll, FileProtocolHandler " + getLinkURL());
-                            else if (System.getProperty("os.name").toLowerCase().indexOf("mac") >= 0){
-                                Desktop desktop = Desktop.getDesktop();
-                                try {
-                                    desktop.browse(new URI(getLinkURL()));
-                                } catch (URISyntaxException e) {
-                                    // TODO Auto-generated catch block
-                                    logger.error("Browser Error");
-                                }
-                            }
-                            else {
-                                logger.error("OS is not supported.");
-                                return;
-                            }
-                                
-                            StreamGobbler errorGobbler = new StreamGobbler(proc.getErrorStream(), "ERROR"); //$NON-NLS-1$
-                            StreamGobbler outputGobbler = new StreamGobbler(proc.getInputStream(), "OUTPUT"); //$NON-NLS-1$
-                            errorGobbler.start();
-                            outputGobbler.start();
-                            exitVal = proc.waitFor();
-                        } catch (IOException iox) {
-                            logger.error("Browser Error", iox);
-                        } catch (InterruptedException ie) {
-                            logger.error("Browser Error", ie);
-                        }
-
-                        if (exitVal != 0) {
-                            logger.error("Process exited with error" + exitVal);
-                        }
-                    }
-                };
-
-                runner.setPriority(Thread.MAX_PRIORITY);
-                runner.start();
+                UIUtils.openURL(e.text);
             }
-
-            @Override
-            public void widgetDefaultSelected(SelectionEvent e) {}
         });
-        FormData linkData = new FormData();
-        linkData.top = new FormAttachment(messageLabel);
-        linkData.right = new FormAttachment(titleImage);
-        linkData.left = new FormAttachment(0, 10);
-        link.setLayoutData(linkData);
-
+        
         Composite greyArea = new Composite(shell, SWT.NULL);
         GridLayout childLayout = new GridLayout(1, false);
         childLayout.marginHeight = 0;
@@ -275,27 +162,11 @@ public class HyperlinkDialog extends Dialog {
 
     }
 
-    public String getMessage() {
-        return message;
-    }
-
-    public void setMessage(String message) {
-        this.message = message;
-    }
-
     public String getBoldMessage() {
         return boldMessage;
     }
 
     public void setBoldMessage(String message) {
         boldMessage = message;
-    }
-
-    public String getLinkText() {
-        return linkText;
-    }
-
-    public void setLinkText(String linkText) {
-        this.linkText = linkText;
     }
 }

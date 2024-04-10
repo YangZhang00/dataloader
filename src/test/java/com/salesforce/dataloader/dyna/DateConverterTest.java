@@ -27,7 +27,10 @@ package com.salesforce.dataloader.dyna;
 
 import org.apache.commons.beanutils.ConversionException;
 import org.junit.Assert;
+import org.junit.Ignore;
 import org.junit.Test;
+
+import com.salesforce.dataloader.util.AppUtil;
 
 import java.util.Calendar;
 import java.util.Date;
@@ -175,6 +178,9 @@ public class DateConverterTest {
         assertValidDate("String to calendar conversation fails when minutes not specified with non-GMT timezone", dateStringWithFullBasicTime, calDateGMT, false);
         assertValidDate("String to calendar conversation fails when minutes not specified with sans-T format", dateStringWithoutT, calDateGMT, false);
 
+        dateStringWithoutT = "20111015"; //yyyyMMdd
+        calDateGMT.set(2011, 9, 15, 0, 0, 0);
+        assertValidDate("String to calendar conversation fails when minutes not specified with sans-T format", dateStringWithoutT, calDateGMT, false);
     }
 
     /**
@@ -187,7 +193,7 @@ public class DateConverterTest {
     public void testDateConverterWithNull() {
 
         Calendar calDate;
-        DateConverter converter = new DateConverter(TZ);
+        DateTimeConverter converter = new DateTimeConverter(TZ, false);
 
         // test null and empty string
         calDate = (Calendar) converter.convert(null, null);
@@ -207,7 +213,7 @@ public class DateConverterTest {
     public void testDateClosureUnderCalendarConversion() {
 
         Calendar calDate;
-        DateConverter converter = new DateConverter(TZ);
+        DateTimeConverter converter = new DateTimeConverter(TZ, false);
 
         // if we pass in a calendar, should get the same Calendar back
         Calendar testCalDate = Calendar.getInstance();
@@ -247,7 +253,7 @@ public class DateConverterTest {
      * @expectedResults Assert that the calendar and the string will evaluate to the same instant.
      */
     @Test
-    public void testNotInDelimeterPattern() {
+    public void testNotInDelimiterPattern() {
 
         // use this as the expected calendar instance
         Calendar expCalDate = Calendar.getInstance(TZ);
@@ -320,23 +326,37 @@ public class DateConverterTest {
      */
     @Test
     public void testDateOnly() {
-
+        testDateOnly(true);
+        testDateOnly(false);
+    }
+    
+    private void testDateOnly(boolean useEuropeanDateFormat) {
         Calendar expCalDate = Calendar.getInstance(TZ);
 
         expCalDate.clear();
-        expCalDate.set(2004, 03, 29);
+        // yyyy, mm, dd
+        expCalDate.set(2020, 10, 05);
 
-        assertValidDate("2004-04-29 00:00:00z", expCalDate, false);
-        assertValidDate("2004-04-29 00:00:00", expCalDate, false);
-        assertValidDate("2004-04-29 00:00", expCalDate, false);
-        assertValidDate("2004-04-29 00", expCalDate, false);
-        assertValidDate("2004-04-29", expCalDate, false);
-        assertValidDate("2004-04-29 ", expCalDate, false);
-        assertValidDate("2004-04-29T", expCalDate, false);
-        assertValidDate("2004-04-29Tz", expCalDate, false);
+        assertValidDate("2020-11-05 00:00:00z", expCalDate, useEuropeanDateFormat);
+        assertValidDate("2020-11-05 00:00:00Z", expCalDate, useEuropeanDateFormat);
+        assertValidDate("2020-11-05 00:00:00", expCalDate, useEuropeanDateFormat);
+        assertValidDate("2020-11-05 00:00", expCalDate, useEuropeanDateFormat);
+        assertValidDate("2020-11-05 00", expCalDate, useEuropeanDateFormat);
+        assertValidDate("2020-11-05", expCalDate, useEuropeanDateFormat);
+        assertValidDate("2020-11-05 ", expCalDate, useEuropeanDateFormat);
+        assertValidDate("2020-11-05T", expCalDate, useEuropeanDateFormat);
+        assertValidDate("2020-11-05Tz", expCalDate, useEuropeanDateFormat);
+        assertValidDate("2020-11-05TZ", expCalDate, useEuropeanDateFormat);
+        assertValidDate("20201105", expCalDate, useEuropeanDateFormat);
+        assertValidDate("20201105 ", expCalDate, useEuropeanDateFormat);
+        if (useEuropeanDateFormat) {
+            assertValidDate("05/11/2020", expCalDate, useEuropeanDateFormat);
+        } else {
+            assertValidDate("11/05/2020", expCalDate, useEuropeanDateFormat);
+        }
 
         //should fail
-        assertStringAndCalendarDoNotMatch("2004-04-29 00:00:01", expCalDate, false);
+        assertStringAndCalendarDoNotMatch("2020-11-05 00:00:01", expCalDate, useEuropeanDateFormat);
     }
 
 
@@ -482,6 +502,7 @@ public class DateConverterTest {
         expCalDate.clear();
         expCalDate.set(1984, 04 - 1, 12, 6, 34, 22);
         assertValidDate("1984-04-12T06:34:22", expCalDate, false);
+        assertValidDate("1984-04-12T08:34:22+02:00", expCalDate, false);
     }
 
 
@@ -513,7 +534,7 @@ public class DateConverterTest {
      *
      */
     @Test
-    public void testSlashAndNoTDelimeterFormat() {
+    public void testSlashAndNoTDelimiterFormat() {
 
         Calendar expCalDate = Calendar.getInstance(TZ);
 
@@ -539,7 +560,7 @@ public class DateConverterTest {
      *
      */
     @Test
-    public void testSlashWithTimeZoneDelimeterFormat() {
+    public void testSlashWithTimeZoneDelimiterFormat() {
 
         TimeZone wst = TimeZone.getTimeZone("Australia/Perth");
         Calendar calDateWST = Calendar.getInstance(wst);
@@ -547,16 +568,16 @@ public class DateConverterTest {
         calDateWST.clear();
         calDateWST.set(2009, 7 - 1, 16, 12, 14, 45);
 
-        for (String delimeter : new String[] { " ", "T" }) {
+        for (String delimiter : new String[] { " ", "T" }) {
 
             //vanilla cases that don't cross into different days
-            assertValidDate("07/16/2009" + delimeter + "12:14:45+0800", calDateWST,    false);
-            assertValidDate("07/16/2009" + delimeter + "02:14:45-0200", calDateWST, false); // offset case
-            assertValidDate("07/16/2009" + delimeter + "16:14:45+1200", calDateWST, false); // offset case
+            assertValidDate("07/16/2009" + delimiter + "12:14:45+0800", calDateWST,    false);
+            assertValidDate("07/16/2009" + delimiter + "02:14:45-0200", calDateWST, false); // offset case
+            assertValidDate("07/16/2009" + delimiter + "16:14:45+1200", calDateWST, false); // offset case
 
             //cross-day cases
-            assertValidDate("07/16/2009" + delimeter + "03:14:45-0100", calDateWST,    false);
-            assertValidDate("07/16/2009" + delimeter + "12:14:45+0800", calDateWST, false); // offset case
+            assertValidDate("07/16/2009" + delimiter + "03:14:45-0100", calDateWST,    false);
+            assertValidDate("07/16/2009" + delimiter + "12:14:45+0800", calDateWST, false); // offset case
         }
     }
 
@@ -569,7 +590,7 @@ public class DateConverterTest {
      *
      */
     @Test
-    public void testSlashWithTimeZoneDelimeterFormatEuropeanFormat() {
+    public void testSlashWithTimeZoneDelimiterFormatEuropeanFormat() {
 
         TimeZone wst = TimeZone.getTimeZone("Australia/Perth");
         Calendar calDateWST = Calendar.getInstance(wst);
@@ -577,16 +598,16 @@ public class DateConverterTest {
         calDateWST.clear();
         calDateWST.set(2009, 7 - 1, 16, 12, 14, 45);
 
-        for (String delimeter : new String[] { " ", "T" }) {
+        for (String delimiter : new String[] { " ", "T" }) {
 
             //vanilla cases that don't cross into different days
-            assertValidDate("16/07/2009" + delimeter + "12:14:45+0800", calDateWST,    true);
-            assertValidDate("16/07/2009" + delimeter + "02:14:45-0200", calDateWST, true); // offset case
-            assertValidDate("16/07/2009" + delimeter + "16:14:45+1200", calDateWST, true); // offset case
+            assertValidDate("16/07/2009" + delimiter + "12:14:45+0800", calDateWST,    true);
+            assertValidDate("16/07/2009" + delimiter + "02:14:45-0200", calDateWST, true); // offset case
+            assertValidDate("16/07/2009" + delimiter + "16:14:45+1200", calDateWST, true); // offset case
 
             //cross-day cases
-            assertValidDate("16/07/2009" + delimeter + "03:14:45-0100", calDateWST,    true);
-            assertValidDate("16/07/2009" + delimeter + "12:14:45+0800", calDateWST, true); // offset case
+            assertValidDate("16/07/2009" + delimiter + "03:14:45-0100", calDateWST,    true);
+            assertValidDate("16/07/2009" + delimiter + "12:14:45+0800", calDateWST, true); // offset case
         }
     }
 
@@ -625,34 +646,202 @@ public class DateConverterTest {
         assertInvalidDate("20A4-11-08", null, false);
     }
 
+    // test user-specified timezones and date formats specified at
+    // https://developer.salesforce.com/docs/atlas.en-us.dataLoader.meta/dataLoader/supported_data_types.htm
     @Test
     public void testUserSpecifiedTimeZoneIsUsed() throws Exception {
-        DateConverter dateConverter = new DateConverter(TimeZone.getTimeZone("Asia/Tokyo"));
+        DateTimeConverter AsianTZDateConverter = new DateTimeConverter(TimeZone.getTimeZone("Asia/Tokyo"), false);
+        DateTimeConverter USTZDateConverter = new DateTimeConverter(TimeZone.getTimeZone("America/Los_Angeles"), false);
+        DateTimeConverter GMTTZDateConverter = new DateTimeConverter(TimeZone.getTimeZone("GMT"), false);
+        DateOnlyConverter AsianTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("Asia/Tokyo"), false);
+        DateOnlyConverter USTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("America/Los_Angeles"), false);
+        DateOnlyConverter GMTTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("GMT"), false);
 
-        Calendar result = (Calendar) dateConverter.convert(null, "6/7/2012");
+        // DateConverter should always return the Calendar in GMT.
+        Calendar result = (Calendar) AsianTZDateConverter.convert(null, "6/7/2012");
         assertEquals(6, result.get(Calendar.MONTH) + 1);
         assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
         assertEquals(TimeZone.getTimeZone("Asia/Tokyo"), result.getTimeZone());
 
-        result = (Calendar) dateConverter.convert(null, "6/7/2012 0:00");
+        result = (Calendar) USTZDateConverter.convert(null, "6/7/2012");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+
+        result = (Calendar) GMTTZDateConverter.convert(null, "6/7/2012");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("GMT"), result.getTimeZone());
+
+        // DateConverter should always return the Calendar in GMT.
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "6/22/2012");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(22, result.get(Calendar.DAY_OF_MONTH));
+
+        AppUtil.setUseGMTForDateFieldValue(true);
+        AsianTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("Asia/Tokyo"), false);
+        USTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("America/Los_Angeles"), false);
+        result = (Calendar) USTZDateOnlyConverter.convert(null, "6/22/2012");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(22, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("GMT"), result.getTimeZone());
+
+        AsianTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("Asia/Tokyo"), false);
+        USTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("America/Los_Angeles"), false);
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "6/7/2012 0:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH) + 1);
+        assertEquals(TimeZone.getTimeZone("GMT"), result.getTimeZone());
+
+        AsianTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("Asia/Tokyo"), false);
+        USTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("America/Los_Angeles"), false);
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "6/7/2012 02:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH) + 1);
+        assertEquals(TimeZone.getTimeZone("GMT"), result.getTimeZone());
+
+        // JST is 9 hours ahead of GMT
+        // Any time after 9am in Japan is the same day in GMT
+        AsianTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("Asia/Tokyo"), false);
+        USTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("America/Los_Angeles"), false);
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "6/7/2012 11:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("GMT"), result.getTimeZone());
+
+        AsianTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("Asia/Tokyo"), false);
+        USTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("America/Los_Angeles"), false);
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "6/7/2012 23:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("GMT"), result.getTimeZone());
+
+        AppUtil.setUseGMTForDateFieldValue(false);
+        AsianTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("Asia/Tokyo"), false);
+        USTZDateOnlyConverter = new DateOnlyConverter(TimeZone.getTimeZone("America/Los_Angeles"), false);
+
+        result = (Calendar) GMTTZDateOnlyConverter.convert(null, "6/22/2012");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(22, result.get(Calendar.DAY_OF_MONTH));
+
+        result = (Calendar) AsianTZDateConverter.convert(null, "6/7/2012 0:00");
         assertEquals(6, result.get(Calendar.MONTH) + 1);
         assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
         assertEquals(TimeZone.getTimeZone("Asia/Tokyo"), result.getTimeZone());
 
-        result = (Calendar) dateConverter.convert(null, "2012-06-07 00:00:00JST");
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "6/7/2012 04:00");
         assertEquals(6, result.get(Calendar.MONTH) + 1);
         assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
         assertEquals(TimeZone.getTimeZone("Asia/Tokyo"), result.getTimeZone());
 
-        result = (Calendar) dateConverter.convert(null, "2012-06-07 00:00:00JST");
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "6/7/2012 11:00");
         assertEquals(6, result.get(Calendar.MONTH) + 1);
         assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
         assertEquals(TimeZone.getTimeZone("Asia/Tokyo"), result.getTimeZone());
-    }
+
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "6/7/2012 17:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("Asia/Tokyo"), result.getTimeZone());
+
+        result = (Calendar) USTZDateConverter.convert(null, "6/7/2012 0:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+
+        result = (Calendar) USTZDateOnlyConverter.convert(null, "6/7/2012 11:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+
+        result = (Calendar) USTZDateOnlyConverter.convert(null, "6/7/2012 23:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+
+        result = (Calendar) AsianTZDateConverter.convert(null, "2012-06-07 00:00:00JST");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("Asia/Tokyo"), result.getTimeZone());
+
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "2012-06-07 10:00:00JST");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("Asia/Tokyo"), result.getTimeZone());
+
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "2012-06-07 22:00:00JST");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("Asia/Tokyo"), result.getTimeZone());
+
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00PST");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00 PST");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00Pacific Standard Time");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00 Pacific Standard Time");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00GMT-08:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+ 
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00 GMT-08:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+        
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00-08:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+        
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00 -08:00");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+        
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00-0800");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+        
+        result = (Calendar) USTZDateConverter.convert(null, "2012-06-07 00:00:00 -0800");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("America/Los_Angeles"), result.getTimeZone());
+        
+        result = (Calendar) AsianTZDateConverter.convert(null, "2012-06-07 00:00:00JST");
+        assertEquals(6, result.get(Calendar.MONTH) + 1);
+        assertEquals(7, result.get(Calendar.DAY_OF_MONTH));
+        assertEquals(TimeZone.getTimeZone("Asia/Tokyo"), result.getTimeZone());
+
+        // Make sure the date is not changed in Japan DST
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "1948-05-01"); // JST(UTC+9)
+        assertEquals(5, result.get(Calendar.MONTH) + 1);
+        assertEquals(1, result.get(Calendar.DAY_OF_MONTH));
+
+        result = (Calendar) AsianTZDateOnlyConverter.convert(null, "1948-05-02"); // DST(UTC+10)
+        assertEquals(5, result.get(Calendar.MONTH) + 1);
+        assertEquals(2, result.get(Calendar.DAY_OF_MONTH));
+     }
 
     private void assertValidDate(String msg, String strDate, Calendar expCalDate, boolean useEuropean) {
 
-        DateConverter converter = new DateConverter(TZ, useEuropean);
+        DateTimeConverter converter = new DateTimeConverter(TZ, useEuropean);
         Calendar calFromString = (Calendar)converter.convert(null, strDate);  //converter is set to be
         assertNotNull(calFromString);  //here, caldate is set to be in pacific time
         calFromString.setLenient(false);
@@ -668,7 +857,7 @@ public class DateConverterTest {
 
     private void assertStringAndCalendarDoNotMatch(String strDate, Calendar expCalDate, boolean useEuropean) {
 
-        DateConverter converter = new DateConverter(TZ, useEuropean);
+        DateTimeConverter converter = new DateTimeConverter(TZ, useEuropean);
         Calendar calFromString = (Calendar)converter.convert(null, strDate);  //converter is set to be
         assertNotNull(calFromString);  //here, caldate is set to be in pacific time
         calFromString.setLenient(false);
@@ -680,7 +869,7 @@ public class DateConverterTest {
 
     private void assertInvalidDate(String strDate, Calendar expCalDate, boolean useEuropean) {
 
-        DateConverter converter = new DateConverter(TZ, useEuropean);
+        DateTimeConverter converter = new DateTimeConverter(TZ, useEuropean);
         try {
             converter.convert(null, strDate); // converter is set to be
             Assert.fail("The conversion of an invalid string into a valid date occurred");

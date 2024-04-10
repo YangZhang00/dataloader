@@ -29,10 +29,9 @@ package com.salesforce.dataloader.config;
 import com.salesforce.dataloader.action.OperationInfo;
 import com.salesforce.dataloader.exception.ConfigInitializationException;
 import com.salesforce.dataloader.exception.ParameterLoadException;
+import com.salesforce.dataloader.exception.ProcessInitializationException;
 import com.salesforce.dataloader.security.EncryptionAesUtil;
-
-import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.LogManager;
+import com.salesforce.dataloader.util.AppUtil;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -42,8 +41,11 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
-import java.io.UnsupportedEncodingException;
+import java.lang.reflect.Field;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.security.GeneralSecurityException;
 import java.text.DateFormat;
 import java.text.ParseException;
@@ -58,15 +60,67 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.TimeZone;
+
+import javax.xml.parsers.FactoryConfigurationError;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * @author Lexi Viripaeff
  * @since 6.0
+ * 
+ * **** README *****
+ * 
+ * Config class assimilates all properties including:
+ * - properties specified in config.properties file
+ * - properties specified in process-conf.xml file
+ * - properties specified as command line arguments
+ * - properties specified in Settings dialog - these get stored in config.properties file
+ * - properties set during operation steps (including login) and execution of an operation
+ * 
+ * How properties are loaded, set in-memory, and saved to a file:
+ * - Properties loaded from and saved to config.properties file
+ *   All properties except those that are defined with the prefix "CLI_OPTION_"
+ *   can be specified in config.properties file. 
+ *   "Save" from Setup dialog saves modified properties in config.properties file.
+ *   
+ * - Properties loaded from and saved to <process name>_lastRun.properties and ui_lastRun.properties files
+ *   Contains 2 properties: timestamp of the last run and number of records processed during
+ *   last upload (insert, upsert, update, delete, hard delete) operation if the operation
+ *   was performed using Partner API.
+ * 
+ * - Properties loaded from process-conf.xml file. Properties are not saved to process-conf.xml.
+ *   Contains properties relevant to execute an operation in the batch mode.
+ *   A property specified in process-conf.xml overrides the same property
+ *   specified in config.properties. However, it DOES NOT overwrite any property
+ *   in config.properties file.
+ *   
+ * - Properties loaded from command line arguments
+ *   Some properties can only be specified through command line arguments. These
+ *   properties are defined with the prefix "CLI_OPTION_". A property set
+ *   in command line argument overrides the value set in other files.
+ *  
+ * - Properties set in Settings dialog and saved in config.properties file
+ * 
+ * - Properties set during actions and saved in config.properties/<operation | "ui">_lastRun.properties file.
+ *   Some properties are set during actions such as login, specifying results folder for an operation, and so on.
+ *   For example, "process.operation" property is set when user clicks on the operation button.
+ *   These properties may not get saved depending on whether they are designated as "read-only" properties.
+ *   
+ * - Certain properties are "read-only" in that their value set during the app execution
+ *   is never saved. 
+ *   For example, "sfdc.password" can be specified in config.properties, which
+ *   may be overridden by a different value when the user logs in. However, its 
+ *   value specified in config.properties is not overridden when save() method is invoked.
+ *
  */
 public class Config {
-    private static Logger logger = LogManager.getLogger(Config.class);
+    private static Logger logger;
+    private static final String DECRYPTED_SUFFIX = ".decrypted";
 
     /**
      * Default values for specific parameters
@@ -83,11 +137,18 @@ public class Config {
     public static final int MAX_LOAD_BATCH_SIZE = 200;
     public static final int MAX_DAO_READ_BATCH_SIZE = 200;
     public static final int MAX_DAO_WRITE_BATCH_SIZE = 2000;
+    
+    // Bulk v1 and v2 limits specified at https://developer.salesforce.com/docs/atlas.en-us.salesforce_app_limits_cheatsheet.meta/salesforce_app_limits_cheatsheet/salesforce_app_limits_platform_bulkapi.htm
     public static final int MAX_BULK_API_BATCH_BYTES = 10000000;
     public static final int MAX_BULK_API_BATCH_SIZE = 10000;
+    public static final int MAX_BULKV2_API_JOB_BYTES = 150000000;
+    public static final int MAX_BULKV2_API_JOB_SIZE = 150000000;
     public static final int DEFAULT_BULK_API_BATCH_SIZE = 2000;
+    
     public static final long DEFAULT_BULK_API_CHECK_STATUS_INTERVAL = 5000L;
     public static final String DEFAULT_ENDPOINT_URL = "https://login.salesforce.com";
+    public static final String LIGHTNING_ENDPOINT_URL_PART_VAL = "lightning.force.com";
+    public static final String MYSF_ENDPOINT_URL_PART_VAL = "mysalesforce.com";
     public static final String OAUTH_PROD_ENVIRONMENT_VAL = "Production";
     public static final String OAUTH_SB_ENVIRONMENT_VAL = "Sandbox";
 
@@ -99,8 +160,9 @@ public class Config {
 
     public static final String OAUTH_BULK_CLIENTID_VAL = "DataLoaderBulkUI/";
     public static final String OAUTH_PARTNER_CLIENTID_VAL = "DataLoaderPartnerUI/";
-
-
+    
+    public static final int DEFAULT_BULK_QUERY_PK_CHUNK_SIZE = 100000;
+    public static final int MAX_BULK_QUERY_PK_CHUNK_SIZE = 250000;
 
     /*
      * Issue #59 - Dataloader will not read all the database rows to get a total count
@@ -113,13 +175,17 @@ public class Config {
      * Constants that were made not configurable by choice
      */
     public static final String ID_COLUMN_NAME = "ID"; //$NON-NLS-1$
+    public static final String ID_COLUMN_NAME_IN_BULKV2 = "sf__id";
     public static final String ERROR_COLUMN_NAME = "ERROR"; //$NON-NLS-1$
     public static final String STATUS_COLUMN_NAME = "STATUS"; //$NON-NLS-1$
+    public static final String STATUS_COLUMN_NAME_IN_BULKV2 = "sf__Created"; //$NON-NLS-1$
 
     /**
      * The mapping from preference name to preference value (represented as strings).
      */
-    private final Properties properties;
+    private Properties properties;
+    private Properties readOnlyProperties;
+    private Map<String, String> parameterOverridesMap;
 
     /**
      * The default-default value for the respective types.
@@ -140,13 +206,18 @@ public class Config {
 
     // Loader Preferences
     public static final String HIDE_WELCOME_SCREEN = "loader.hideWelcome";
+    public static final String SHOW_LOADER_UPGRADE_SCREEN = "loader.ui.showUpgrade";
 
     // Delimiter settings
-    public static final String CSV_DELIMETER_COMMA = "loader.csvComma";
-    public static final String CSV_DELIMETER_TAB = "loader.csvTab";
-    public static final String CSV_DELIMETER_OTHER = "loader.csvOther";
-    public static final String CSV_DELIMETER_OTHER_VALUE = "loader.csvOtherValue";
-
+    public static final String CSV_DELIMITER_COMMA = "loader.csvComma";
+    public static final String CSV_DELIMITER_TAB = "loader.csvTab";
+    public static final String CSV_DELIMITER_OTHER = "loader.csvOther";
+    public static final String CSV_DELIMITER_OTHER_VALUE = "loader.csvOtherValue";
+    public static final String CSV_DELIMITER_FOR_QUERY_RESULTS = "loader.query.delimiter";
+    public static final String BUFFER_UNPROCESSED_BULK_QUERY_RESULTS = "loader.bufferUnprocessedBulkQueryResults";
+    public static final String INCLUDE_RICH_TEXT_FIELD_DATA_IN_QUERY_RESULTS = "loader.query.includeBinaryData";
+    public static final String CACHE_DESCRIBE_GLOBAL_RESULTS = "loader.cacheSObjectNamesAndFields";
+    
     //Special Internal Configs
     public static final String SFDC_INTERNAL = "sfdcInternal"; //$NON-NLS-1$
     public static final String SFDC_INTERNAL_IS_SESSION_ID_LOGIN = "sfdcInternal.isSessionIdLogin"; //$NON-NLS-1$
@@ -171,10 +242,14 @@ public class Config {
     public static final String DEBUG_MESSAGES_FILE = "sfdc.debugMessagesFile"; //$NON-NLS-1$
     public static final String RESET_URL_ON_LOGIN = "sfdc.resetUrlOnLogin"; //$NON-NLS-1$
     public static final String TRUNCATE_FIELDS = "sfdc.truncateFields";//$NON-NLS-1$
+    public static final String FORMAT_PHONE_FIELDS = "sfdc.formatPhoneFields";//$NON-NLS-1$
+
     public static final String BULK_API_ENABLED = "sfdc.useBulkApi";
     public static final String BULK_API_SERIAL_MODE = "sfdc.bulkApiSerialMode";
     public static final String BULK_API_CHECK_STATUS_INTERVAL = "sfdc.bulkApiCheckStatusInterval";
     public static final String BULK_API_ZIP_CONTENT = "sfdc.bulkApiZipContent";
+    public static final String BULKV2_API_ENABLED = "sfdc.useBulkV2Api";
+
     public static final String WIRE_OUTPUT = "sfdc.wireOutput";
     public static final String TIMEZONE = "sfdc.timezone";
 
@@ -196,7 +271,10 @@ public class Config {
     public static final String OAUTH_CLIENTSECRET = OAUTH_PREFIX + OAUTH_PARTIAL_CLIENTSECRET;
     public static final String OAUTH_CLIENTID = OAUTH_PREFIX + OAUTH_PARTIAL_CLIENTID;
     public static final String OAUTH_REDIRECTURI = OAUTH_PREFIX + OAUTH_PARTIAL_REDIRECTURI;
-
+    public static final String OAUTH_LOGIN_FROM_BROWSER = OAUTH_PREFIX + "loginfrombrowser";
+    public static final String REUSE_CLIENT_CONNECTION = "sfdc.reuseClientConnection";
+    public static final String RICH_TEXT_FIELD_REGEX = "sfdx.richtext.regex";
+    
     // salesforce operation parameters
     public static final String INSERT_NULLS = "sfdc.insertNulls"; //$NON-NLS-1$
     public static final String ENTITY = "sfdc.entity"; //$NON-NLS-1$
@@ -205,10 +283,15 @@ public class Config {
     public static final String EXTERNAL_ID_FIELD = "sfdc.externalIdField"; //$NON-NLS-1$
     public static final String EXTRACT_REQUEST_SIZE = "sfdc.extractionRequestSize"; //$NON-NLS-1$
     public static final String EXTRACT_SOQL = "sfdc.extractionSOQL"; //$NON-NLS-1$
+    public static final String SORT_EXTRACT_FIELDS = "sfdc.sortExtractionFields"; //$NON-NLS-1$
+    public static final String LOAD_PRESERVE_WHITESPACE_IN_RICH_TEXT = "sfdc.load.preserveWhitespaceInRichText";
 
     //
     // process configuration (action parameters)
     //
+    // process.name is used to load the DynaBean from process-conf.xml file 
+    // with the same id as the value of process.name property.
+    public static final String PROCESS_NAME = "process.name";
     public static final String OPERATION = "process.operation"; //$NON-NLS-1$
     public static final String MAPPING_FILE = "process.mappingFile"; //$NON-NLS-1$
     public static final String EURO_DATES = "process.useEuropeanDates"; //$NON-NLS-1$
@@ -220,9 +303,13 @@ public class Config {
     public static final String ENABLE_LAST_RUN_OUTPUT = "process.enableLastRunOutput"; //$NON-NLS-1$
     public static final String LAST_RUN_OUTPUT_DIR = "process.lastRunOutputDirectory"; //$NON-NLS-1$
     public static final String OUTPUT_ERROR = "process.outputError"; //$NON-NLS-1$
+    public static final String OUTPUT_UNPROCESSED_RECORDS = "process.unprocessedRecords"; //$NON-NLS-1$
     public static final String LOAD_ROW_TO_START_AT = "process.loadRowToStartAt"; //$NON-NLS-1$
     public static final String INITIAL_LAST_RUN_DATE = "process.initialLastRunDate";
     public static final String ENCRYPTION_KEY_FILE = "process.encryptionKeyFile"; //$NON-NLS-1$
+    public static final String PROCESS_THREAD_NAME = "process.thread.name";
+    public static final String PROCESS_KEEP_ACCOUNT_TEAM = "process.keepAccountTeam";
+    public static final String PROCESS_EXIT_WITH_ERROR_ON_FAILED_ROWS_BATCH_MODE = "process.batchMode.exitWithErrorOnFailedRows";
 
     // data access configuration (e.g., for CSV file, database, etc).
     public static final String DAO_TYPE = "dataAccess.type"; //$NON-NLS-1$
@@ -230,6 +317,8 @@ public class Config {
     public static final String DAO_READ_BATCH_SIZE = "dataAccess.readBatchSize";
     public static final String DAO_WRITE_BATCH_SIZE = "dataAccess.writeBatchSize";
     public static final String DAO_SKIP_TOTAL_COUNT = "dataAccess.skipTotalCount";
+    public static final String DAO_READ_PREPROCESSOR_SCRIPT = "dataAccess.read.preProcessorScript";
+    public static final String DAO_WRITE_POSTPROCESSOR_SCRIPT = "dataAccess.write.postProcessorScript";
 
     /*
      * TODO: when batching is introduced to the DataAccess, these parameters will become useful
@@ -238,7 +327,39 @@ public class Config {
      */
     public static final String READ_UTF8 = "dataAccess.readUTF8"; //$NON-NLS-1$
     public static final String WRITE_UTF8 = "dataAccess.writeUTF8"; //$NON-NLS-1$
+    public static final String READ_CHARSET = "dataAccess.readCharset";
+    
+    public static final String API_VERSION_PROP="salesforce.api.version";
 
+    
+    /**
+     *  ===============  PILOT config properties ========
+     * - These properties are used for the features in pilot phase. These features are
+     *   not supported. Also, they may not be complete.
+     *   
+     * - The property name is prefixed with "pilot". Remove the prefix and move the property
+     *   declaration above this comment section when the feature is complete and supported.
+     * 
+     * - DO NOT EXPOSE THEM THROUGH THE UI.
+     * ===================================================
+     */
+    public static final String PILOT_PROPERTY_PREFIX = "pilot.";
+    
+    /*
+    public static final String ENABLE_BULK_QUERY_PK_CHUNKING = PILOT_PROPERTY_PREFIX + "sfdc.enableBulkQueryPKChunking";
+    public static final String BULK_QUERY_PK_CHUNK_SIZE =  PILOT_PROPERTY_PREFIX + "sfdc.bulkQueryPKChunkSize";
+    public static final String BULK_QUERY_PK_CHUNK_START_ROW = PILOT_PROPERTY_PREFIX + "sfdc.bulkQueryChunkStartRow";
+    */
+    public static final String DUPLICATE_RULE_ALLOW_SAVE = PILOT_PROPERTY_PREFIX + "sfdc.duplicateRule.allowSave"; //$NON-NLS-1$
+    public static final String DUPLICATE_RULE_INCLUDE_RECORD_DETAILS = PILOT_PROPERTY_PREFIX + "sfdc.duplicateRule.includeRecordDetails"; //$NON-NLS-1$
+    public static final String DUPLICATE_RULE_RUN_AS_CURRENT_USER = PILOT_PROPERTY_PREFIX + "sfdc.duplicateRule.runAsCurrentUser"; //$NON-NLS-1$
+    public static final String LIMIT_OUTPUT_TO_QUERY_FIELDS = "loader.query.limitOutputToQueryFields";
+    /*
+     * ===============================
+     * End of config properties
+     * ===============================
+     */
+    
     /**
      * Indicates whether a value as been changed
      */
@@ -252,17 +373,15 @@ public class Config {
     /**
      * The <code>lastRun</code> is for last run statistics file
      */
-    private final LastRun lastRun;
+    private LastRun lastRun;
     /**
      * <code>encrypter</code> is a utility used internally in the config for reading/writing
      * encrypted values. Right now, the list of encrypted values is known to this class only.
      */
     private final EncryptionAesUtil encrypter = new EncryptionAesUtil();
 
-    private boolean isBatchMode = false;
-
     private final String configDir;
-
+    
     /**
      * <code>dateFormatter</code> will be used for getting dates in/out of the configuration
      * file(s)
@@ -282,8 +401,75 @@ public class Config {
     /**
      * communications with bulk api always use UTF8
      */
-    public static final String BULK_API_ENCODING = "UTF-8";
-
+    public static final String BULK_API_ENCODING = StandardCharsets.UTF_8.name();
+    public static final String CONFIG_FILE = "config.properties"; //$NON-NLS-1$
+    
+    /*
+     * command line options. Not stored in config.properties file.
+     * ************
+     * Option names MUST start with the prefix "CLI_OPTION_"
+     * ************
+     */
+    public static final String CLI_OPTION_RUN_MODE = "run.mode";
+    public static final String RUN_MODE_UI_VAL = "ui";
+    public static final String RUN_MODE_BATCH_VAL = "batch";
+    public static final String RUN_MODE_INSTALL_VAL = "install";
+    public static final String RUN_MODE_ENCRYPT_VAL = "encrypt";
+    
+    public static final String SAVE_BULK_SERVER_LOAD_AND_RAW_RESULTS_IN_CSV = "process.bulk.saveServerLoadAndRawResultsInCSV";
+    public static final String PROCESS_BULK_CACHE_DATA_FROM_DAO = "process.bulk.cacheDataFromDao";
+    public static final String READ_ONLY_CONFIG_PROPERTIES = "config.properties.readonly";
+    public static final String WIZARD_WIDTH = "sfdc.ui.wizard.width";
+    public static final String WIZARD_HEIGHT = "sfdc.ui.wizard.height";
+    public static final String WIZARD_X_OFFSET = "sfdc.ui.wizard.xoffset";
+    public static final String WIZARD_Y_OFFSET = "sfdc.ui.wizard.yoffset";
+    public static final String ENFORCE_WIZARD_WIDTH_HEIGHT_CONFIG = "sfdc.ui.wizard.enforceWidthHeight";
+    public static final String WIZARD_CLOSE_ON_FINISH = "sfdc.ui.wizard.closeOnFinish";
+    public static final String WIZARD_POPULATE_RESULTS_FOLDER_WITH_PREVIOUS_OP_RESULTS_FOLDER = "sfdc.ui.wizard.finishStep.prepopulateWithPreviousOpResultsFolder";
+    public static final String DIALOG_BOUNDS_PREFIX = "sfdc.ui.dialog.";
+    public static final String DIALOG_WIDTH_SUFFIX = ".width";
+    public static final String DIALOG_HEIGHT_SUFFIX = ".height";
+    public static final int DEFAULT_WIZARD_WIDTH = 600;
+    public static final int DEFAULT_WIZARD_HEIGHT = 600;
+    public static final int DEFAULT_WIZARD_X_OFFSET = 50;
+    public static final int DEFAULT_WIZARD_Y_OFFSET = 0;
+    public static final int DIALOG_X_OFFSET = 50;
+    public static final int DIALOG_Y_OFFSET = 50;
+    
+    private static final String LAST_RUN_FILE_SUFFIX = "_lastRun.properties"; //$NON-NLS-1$
+    // Following properties are read-only, i.e. they are not overridden during save() to config.properties
+    // - These properties are not set in Advanced Settings dialog.
+    // - Make sure to list all sensitive properties such as password because these properties are not saved.
+    private static final String[] READ_ONLY_PROPERTY_NAMES = {
+            PASSWORD,
+            PROXY_PASSWORD,
+            OAUTH_ACCESSTOKEN,
+            OAUTH_REFRESHTOKEN,
+            EXTERNAL_ID_FIELD,
+            MAPPING_FILE,
+            EXTRACT_SOQL,
+            OUTPUT_SUCCESS,
+            OUTPUT_ERROR,
+            DAO_NAME,
+            DAO_TYPE,
+            ENTITY,
+            OPERATION,
+            DEBUG_MESSAGES,
+            DEBUG_MESSAGES_FILE,
+            WIRE_OUTPUT,
+            PROCESS_THREAD_NAME,
+            PROCESS_BULK_CACHE_DATA_FROM_DAO,
+            PROCESS_EXIT_WITH_ERROR_ON_FAILED_ROWS_BATCH_MODE,
+            SAVE_BULK_SERVER_LOAD_AND_RAW_RESULTS_IN_CSV,
+            API_VERSION_PROP,
+            READ_CHARSET,
+            READ_ONLY_CONFIG_PROPERTIES,
+            RICH_TEXT_FIELD_REGEX,
+            DAO_READ_PREPROCESSOR_SCRIPT,
+            DAO_WRITE_POSTPROCESSOR_SCRIPT,
+            ENFORCE_WIZARD_WIDTH_HEIGHT_CONFIG
+    };
+    
     /**
      * Creates an empty config that loads from and saves to the a file. <p> Use the methods
      * <code>load()</code> and <code>save()</code> to load and store this preference store. </p>
@@ -292,33 +478,65 @@ public class Config {
      * @see #load()
      * @see #save()
      */
-    public Config(String configDir, String filename, String lastRunFileName) throws ConfigInitializationException {
+    private Config(String filename, Map<String, String> overridesMap) throws ConfigInitializationException, IOException {
         properties = new LinkedProperties();
-        this.configDir = configDir;
         this.filename = filename;
-        // last run gets initialized a little later since config params are needed for that
-        this.lastRun = new LastRun(lastRunFileName);
+        
+        File configFile = new File(this.filename);
+        this.configDir = configFile.getParentFile().getAbsolutePath();
+        
+        // initialize with defaults 
+        // 
+        this.setDefaults();
+        
+        // load from config.properties file
+        this.load();
+        
+        // load parameter overrides after loading from config.properties
+        // parameter overrides are from two places:
+        // 1. process-conf.properties for CLI mode
+        // 2. command line options for both CLI and UI modes
+        this.loadParameterOverrides(overridesMap);
+        
+        // last run gets initialized after loading config and overrides
+        // since config params are needed for initializing last run.
+        initializeLastRun(getLastRunPrefix());
+        
+        // Properties initialization completed. Configure OAuth environment next
+        setOAuthEnvironment(getString(OAUTH_ENVIRONMENT));
     }
-
-    /**
-     * Initialize last run directory and file. This works hand in hand with Config constructor and
-     * the load. The config needs to be loaded before this. In case of UI, config is loaded once, in
-     * case of command line, config is loaded and then overrides are loaded.
-     */
-    public void initLastRunFile() {
-        if (getBoolean(Config.ENABLE_LAST_RUN_OUTPUT)) {
-            String lastRunDir = getString(Config.LAST_RUN_OUTPUT_DIR);
-            if (lastRunDir == null || lastRunDir.length() == 0) {
-                lastRunDir = this.configDir;
-            }
-            this.lastRun.init(lastRunDir, true);
-            try {
-                this.lastRun.load();
-            } catch (IOException e) {
-                logger.warn(Messages.getFormattedString("LastRun.errorLoading", new String[]{
-                        this.lastRun.getFullPath(), e.getMessage()}), e);
-            }
+    
+    private String getLastRunPrefix() {
+        String lastRunFilePrefix = getString(Config.PROCESS_NAME);
+        if (lastRunFilePrefix == null || lastRunFilePrefix.isBlank()) {
+            lastRunFilePrefix = getString(Config.ENTITY) + getString(Config.OPERATION);
         }
+        if (lastRunFilePrefix == null || lastRunFilePrefix.isBlank()) {
+            lastRunFilePrefix = RUN_MODE_UI_VAL;
+        }
+        return lastRunFilePrefix;
+    }
+    
+    private void initializeLastRun(String lastRunFileNamePrefix) {
+        if (lastRunFileNamePrefix == null || lastRunFileNamePrefix.isBlank()) {
+            lastRunFileNamePrefix = getString(Config.CLI_OPTION_RUN_MODE);
+        }
+        String lastRunFileName = lastRunFileNamePrefix + LAST_RUN_FILE_SUFFIX;
+        String lastRunDir = getString(Config.LAST_RUN_OUTPUT_DIR);
+        if (lastRunDir == null || lastRunDir.length() == 0) {
+            lastRunDir = this.configDir;
+        }
+
+        this.lastRun = new LastRun(lastRunFileName, lastRunDir, getBoolean(Config.ENABLE_LAST_RUN_OUTPUT));
+        // Need to initialize last run date if it's present neither in config or override
+        lastRun.setDefault(LastRun.LAST_RUN_DATE, getString(INITIAL_LAST_RUN_DATE));
+
+        try {
+            this.lastRun.load();
+        } catch (IOException e) {
+            logger.warn(Messages.getFormattedString("LastRun.errorLoading", new String[]{
+                    this.lastRun.getFullPath(), e.getMessage()}), e);
+        }        
     }
 
     private boolean useBulkApiByDefault() {
@@ -328,63 +546,97 @@ public class Config {
     /**
      * This sets the current defaults.
      */
-    public void setDefaults() {
-        setValue(HIDE_WELCOME_SCREEN, true);
+    private void setDefaults() {
+        setDefaultValue(HIDE_WELCOME_SCREEN, true);
+        setDefaultValue(SHOW_LOADER_UPGRADE_SCREEN, true);
 
-        setValue(CSV_DELIMETER_COMMA, true);
-        setValue(CSV_DELIMETER_TAB, true);
-        setValue(CSV_DELIMETER_OTHER, false);
-        setValue(CSV_DELIMETER_OTHER_VALUE, "-");
+        setDefaultValue(CSV_DELIMITER_COMMA, true);
+        setDefaultValue(CSV_DELIMITER_TAB, true);
+        setDefaultValue(CSV_DELIMITER_OTHER, false);
+        setDefaultValue(CSV_DELIMITER_OTHER_VALUE, "-");
+        setDefaultValue(CSV_DELIMITER_FOR_QUERY_RESULTS, AppUtil.COMMA);
 
-        setValue(ENDPOINT, DEFAULT_ENDPOINT_URL);
-        setValue(LOAD_BATCH_SIZE, useBulkApiByDefault() ? DEFAULT_BULK_API_BATCH_SIZE : DEFAULT_LOAD_BATCH_SIZE);
-        setValue(LOAD_ROW_TO_START_AT, 0);
-        setValue(TIMEOUT_SECS, DEFAULT_TIMEOUT_SECS);
-        setValue(CONNECTION_TIMEOUT_SECS, DEFAULT_CONNECTION_TIMEOUT_SECS);
-        setValue(ENABLE_RETRIES, true);
-        setValue(MAX_RETRIES, DEFAULT_MAX_RETRIES);
-        setValue(MIN_RETRY_SLEEP_SECS, DEFAULT_MIN_RETRY_SECS);
-        setValue(ASSIGNMENT_RULE, ""); //$NON-NLS-1$
-        setValue(INSERT_NULLS, false);
-        setValue(ENABLE_EXTRACT_STATUS_OUTPUT, false);
-        setValue(ENABLE_LAST_RUN_OUTPUT, true);
-        setValue(RESET_URL_ON_LOGIN, true);
-        setValue(EXTRACT_REQUEST_SIZE, DEFAULT_EXTRACT_REQUEST_SIZE);
-        setValue(DAO_WRITE_BATCH_SIZE, DEFAULT_DAO_WRITE_BATCH_SIZE);
-        setValue(DAO_READ_BATCH_SIZE, DEFAULT_DAO_READ_BATCH_SIZE);
-        setValue(TRUNCATE_FIELDS, true);
+        setDefaultValue(ENDPOINT, DEFAULT_ENDPOINT_URL);
+        setDefaultValue(LOAD_BATCH_SIZE, useBulkApiByDefault() ? DEFAULT_BULK_API_BATCH_SIZE : DEFAULT_LOAD_BATCH_SIZE);
+        setDefaultValue(LOAD_ROW_TO_START_AT, 0);
+        setDefaultValue(TIMEOUT_SECS, DEFAULT_TIMEOUT_SECS);
+        setDefaultValue(CONNECTION_TIMEOUT_SECS, DEFAULT_CONNECTION_TIMEOUT_SECS);
+        setDefaultValue(ENABLE_RETRIES, true);
+        setDefaultValue(MAX_RETRIES, DEFAULT_MAX_RETRIES);
+        setDefaultValue(MIN_RETRY_SLEEP_SECS, DEFAULT_MIN_RETRY_SECS);
+        setDefaultValue(ASSIGNMENT_RULE, ""); //$NON-NLS-1$
+        setDefaultValue(INSERT_NULLS, false);
+        setDefaultValue(ENABLE_EXTRACT_STATUS_OUTPUT, false);
+        setDefaultValue(ENABLE_LAST_RUN_OUTPUT, true);
+        setDefaultValue(RESET_URL_ON_LOGIN, true);
+        setDefaultValue(EXTRACT_REQUEST_SIZE, DEFAULT_EXTRACT_REQUEST_SIZE);
+        setDefaultValue(SORT_EXTRACT_FIELDS, true);
+        setDefaultValue(DAO_WRITE_BATCH_SIZE, DEFAULT_DAO_WRITE_BATCH_SIZE);
+        setDefaultValue(DAO_READ_BATCH_SIZE, DEFAULT_DAO_READ_BATCH_SIZE);
+        setDefaultValue(TRUNCATE_FIELDS, true);
+        setDefaultValue(FORMAT_PHONE_FIELDS, false);
         // TODO: When we're ready, make Bulk API turned on by default.
-        setValue(BULK_API_ENABLED, useBulkApiByDefault());
-        setValue(BULK_API_SERIAL_MODE, false);
-        setValue(BULK_API_ZIP_CONTENT, false);
-        setValue(BULK_API_CHECK_STATUS_INTERVAL, DEFAULT_BULK_API_CHECK_STATUS_INTERVAL);
-        setValue(WIRE_OUTPUT, false);
-        setValue(TIMEZONE, TimeZone.getDefault().getID());
+        setDefaultValue(BULK_API_ENABLED, useBulkApiByDefault());
+        setDefaultValue(BULK_API_SERIAL_MODE, false);
+        setDefaultValue(BULK_API_ZIP_CONTENT, false);
+        setDefaultValue(BULK_API_CHECK_STATUS_INTERVAL, DEFAULT_BULK_API_CHECK_STATUS_INTERVAL);
+        setDefaultValue(WIRE_OUTPUT, false);
+        setDefaultValue(DEBUG_MESSAGES, false);
+        setDefaultValue(TIMEZONE, TimeZone.getDefault().getID());
         //sfdcInternal settings
-        setValue(SFDC_INTERNAL, false);
-        setValue(SFDC_INTERNAL_IS_SESSION_ID_LOGIN, false);
-        setValue(SFDC_INTERNAL_SESSION_ID, (String) null);
+        setDefaultValue(SFDC_INTERNAL, false);
+        setDefaultValue(SFDC_INTERNAL_IS_SESSION_ID_LOGIN, false);
+        setDefaultValue(SFDC_INTERNAL_SESSION_ID, (String) null);
 
         //oauth settings
-        setValue(OAUTH_SERVER, DEFAULT_ENDPOINT_URL);
-        setValue(OAUTH_REDIRECTURI, DEFAULT_ENDPOINT_URL);
-        setValue(OAUTH_ENVIRONMENT, OAUTH_PROD_ENVIRONMENT_VAL);
-        setValue(OAUTH_ENVIRONMENTS, OAUTH_PROD_ENVIRONMENT_VAL + "," + OAUTH_SB_ENVIRONMENT_VAL);
+        setDefaultValue(OAUTH_SERVER, DEFAULT_ENDPOINT_URL);
+        setDefaultValue(OAUTH_REDIRECTURI, DEFAULT_ENDPOINT_URL);
+        setDefaultValue(OAUTH_ENVIRONMENT, OAUTH_PROD_ENVIRONMENT_VAL);
+        setDefaultValue(OAUTH_ENVIRONMENTS, OAUTH_PROD_ENVIRONMENT_VAL + AppUtil.COMMA + OAUTH_SB_ENVIRONMENT_VAL);
 
         /* sfdc.oauth.<env>.<bulk | partner>.clientid = DataLoaderBulkUI | DataLoaderPartnerUI */
-        setValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_BULK_CLIENTID, OAUTH_BULK_CLIENTID_VAL);
-        setValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_PARTNER_CLIENTID, OAUTH_PARTNER_CLIENTID_VAL);
+        setDefaultValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_BULK_CLIENTID, OAUTH_BULK_CLIENTID_VAL);
+        setDefaultValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_PARTNER_CLIENTID, OAUTH_PARTNER_CLIENTID_VAL);
 
-        setValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_BULK_CLIENTID, OAUTH_BULK_CLIENTID_VAL);
-        setValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_PARTNER_CLIENTID, OAUTH_PARTNER_CLIENTID_VAL);
+        setDefaultValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_BULK_CLIENTID, OAUTH_BULK_CLIENTID_VAL);
+        setDefaultValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_PARTNER_CLIENTID, OAUTH_PARTNER_CLIENTID_VAL);
 
         /* production server and redirecturi, sandbox server and redirecturi */
-        setValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_SERVER, OAUTH_PROD_SERVER_VAL);
-        setValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_REDIRECTURI, OAUTH_PROD_REDIRECTURI_VAL);
+        setDefaultValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_SERVER, OAUTH_PROD_SERVER_VAL);
+        setDefaultValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_REDIRECTURI, OAUTH_PROD_REDIRECTURI_VAL);
 
-        setValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_SERVER, OAUTH_SB_SERVER_VAL);
-        setValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_REDIRECTURI, OAUTH_SB_REDIRECTURI_VAL);
-
+        setDefaultValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_SERVER, OAUTH_SB_SERVER_VAL);
+        setDefaultValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_REDIRECTURI, OAUTH_SB_REDIRECTURI_VAL);
+        setDefaultValue(REUSE_CLIENT_CONNECTION, true);
+        /*
+        setDefaultValue(ENABLE_BULK_QUERY_PK_CHUNKING, false);
+        setDefaultValue(BULK_QUERY_PK_CHUNK_SIZE, DEFAULT_BULK_QUERY_PK_CHUNK_SIZE);
+        setDefaultValue(BULK_QUERY_PK_CHUNK_START_ROW, "");
+        */
+        setDefaultValue(DUPLICATE_RULE_ALLOW_SAVE, false);
+        setDefaultValue(DUPLICATE_RULE_INCLUDE_RECORD_DETAILS, false);
+        setDefaultValue(DUPLICATE_RULE_RUN_AS_CURRENT_USER, false);
+        setDefaultValue(BUFFER_UNPROCESSED_BULK_QUERY_RESULTS, false);
+        setDefaultValue(BULKV2_API_ENABLED, false);
+        setDefaultValue(OAUTH_LOGIN_FROM_BROWSER, true);
+        setDefaultValue(LOAD_PRESERVE_WHITESPACE_IN_RICH_TEXT, true);
+        setDefaultValue(Config.CLI_OPTION_RUN_MODE, Config.RUN_MODE_UI_VAL);
+        setDefaultValue(SAVE_BULK_SERVER_LOAD_AND_RAW_RESULTS_IN_CSV, false);
+        setDefaultValue(PROCESS_BULK_CACHE_DATA_FROM_DAO, true);
+        setDefaultValue(PROCESS_KEEP_ACCOUNT_TEAM, false);
+        setDefaultValue(WIZARD_WIDTH, DEFAULT_WIZARD_WIDTH);
+        setDefaultValue(WIZARD_HEIGHT, DEFAULT_WIZARD_HEIGHT);
+        setDefaultValue(ENFORCE_WIZARD_WIDTH_HEIGHT_CONFIG, true);
+        setDefaultValue(DAO_READ_PREPROCESSOR_SCRIPT, "");
+        setDefaultValue(DAO_WRITE_POSTPROCESSOR_SCRIPT, "");
+        setDefaultValue(LIMIT_OUTPUT_TO_QUERY_FIELDS, true);
+        setDefaultValue(WIZARD_CLOSE_ON_FINISH, true);
+        setDefaultValue(WIZARD_POPULATE_RESULTS_FOLDER_WITH_PREVIOUS_OP_RESULTS_FOLDER, true);
+        setDefaultValue(WIZARD_X_OFFSET, DEFAULT_WIZARD_X_OFFSET);
+        setDefaultValue(WIZARD_Y_OFFSET, DEFAULT_WIZARD_Y_OFFSET);
+        setDefaultValue(CACHE_DESCRIBE_GLOBAL_RESULTS, true);
+        setDefaultValue(PROCESS_EXIT_WITH_ERROR_ON_FAILED_ROWS_BATCH_MODE, false);
+        setDefaultValue(INCLUDE_RICH_TEXT_FIELD_DATA_IN_QUERY_RESULTS, false);
     }
 
     /**
@@ -520,7 +772,7 @@ public class Config {
         String values = getString(name);
         ArrayList<String> list = new ArrayList<>();
         if (values != null && !values.trim().isEmpty()) {
-            Collections.addAll(list, values.trim().split(","));
+            Collections.addAll(list, values.trim().split(AppUtil.COMMA));
         }
         return list;
     }
@@ -541,7 +793,7 @@ public class Config {
      *
      * @param configFileProperty property containing a config filename
      * @return Config filename path based on config property value. Config file is assumed to reside
-     * in the global config directory
+     * in the global config folder
      */
     public String getConfigFilename(String configFileProperty) {
         String value = getParamValue(configFileProperty);
@@ -555,10 +807,10 @@ public class Config {
 
 
     /**
-     * Constructs config file path based on the configuration directory and the passed in config
+     * Constructs config file path based on the configuration folder and the passed in config
      * filename
      *
-     * @param configFilename Config filename that resides in the config directory
+     * @param configFilename Config filename that resides in the config folder
      * @return Full path to the config file
      */
     public String constructConfigFilePath(String configFilename) {
@@ -593,7 +845,7 @@ public class Config {
         String value = getParamValue(name);
         if (value == null || value.length() == 0) return MAP_STRING_DEFAULT;
         Map<String, String> mval = new HashMap<String, String>();
-        String[] pairs = value.split(",");
+        String[] pairs = value.split(AppUtil.COMMA);
         for (String pair : pairs) {
             String[] nameValue = pair.split("=");
             if (nameValue.length != 2) {
@@ -610,14 +862,30 @@ public class Config {
     /**
      * @return parameter value
      */
+    
     private String getParamValue(String name) {
-        String value;
-        if (lastRun.hasParameter(name)) {
-            value = lastRun.getProperty(name);
+        String propValue;
+
+        if (lastRun != null && lastRun.hasParameter(name)) {
+            propValue = lastRun.getProperty(name);
         } else {
-            value = properties != null ? properties.getProperty(name) : null;
+            propValue = properties != null ? properties.getProperty(name) : null;
         }
-        return value;
+        
+        // check if a property's value is configured when it used to be a pilot property
+        // if value not set.
+        if (propValue == null && !name.startsWith(PILOT_PROPERTY_PREFIX)) { 
+            String pilotName = PILOT_PROPERTY_PREFIX + name;
+            String pilotValue = getParamValue(pilotName);
+            if (pilotValue != null && !pilotValue.isEmpty()) {
+                // if picking up the value from a pilot property that is no longer in pilot,
+                // set the value for the new property to be the same as the value of the pilot property
+                doSetPropertyAndUpdateConfig(name, propValue, pilotValue);
+            }
+            propValue = pilotValue;
+        }
+        
+        return propValue;
     }
 
     /**
@@ -676,9 +944,29 @@ public class Config {
             throw e;
         }
         // paramter post-processing
-        postLoad(properties);
+        postLoad(properties, true);
 
         dirty = false;
+    }
+    
+    private void restoreReadOnlyProperty(String propertyName) {
+        String preservedPropertyValue = (String)this.readOnlyProperties.get(propertyName);
+        if (preservedPropertyValue == null) {
+            this.properties.remove(propertyName);
+            return;
+        }
+        this.properties.put(propertyName, preservedPropertyValue);
+    }
+    
+    private void preserveReadOnlyProperty(Map<?, ?> propMap, String propertyName) {
+        if (this.readOnlyProperties == null) {
+            this.readOnlyProperties = new Properties();
+        }
+        String propertyValueToPreserve = (String) propMap.get(propertyName);
+        if (propertyValueToPreserve == null) {
+            return;
+        }
+        this.readOnlyProperties.put(propertyName, propertyValueToPreserve);
     }
 
     /**
@@ -687,27 +975,49 @@ public class Config {
      * @param values Values to be post-processed
      */
     @SuppressWarnings("unchecked")
-    private void postLoad(Map values) throws ConfigInitializationException {
-        Map<String, String> propMap = values;
+    private void postLoad(Map<?, ?> propMap, boolean isConfigFilePropsMap) throws ConfigInitializationException {
 
+        if (isConfigFilePropsMap) {
+            for (String propertyName : READ_ONLY_PROPERTY_NAMES) {
+                preserveReadOnlyProperty(propMap, propertyName);
+            }
+        }
         // initialize encryption
-        initEncryption(propMap);
+        initEncryption((Map<String, String>) propMap);
 
         // decrypt encrypted values
-        decryptPasswordProperty(values, PASSWORD);
-        decryptPasswordProperty(values, PROXY_PASSWORD);
-        decryptPasswordProperty(values, OAUTH_ACCESSTOKEN);
-        decryptPasswordProperty(values, OAUTH_REFRESHTOKEN);
-
+        decryptPasswordProperty(propMap, PASSWORD);
+        decryptPasswordProperty(propMap, PROXY_PASSWORD);
+        decryptPasswordProperty(propMap, OAUTH_ACCESSTOKEN);
+        decryptPasswordProperty(propMap, OAUTH_REFRESHTOKEN);
+        
+        // Do not load unsupported properties and CLI options even if they are specified in config.properties file
+        if (isConfigFilePropsMap) {
+            removeCLIOptionsFromProperties();
+            removeUnsupportedProperties();
+        }
     }
 
-    private void decryptPasswordProperty(Map values, String propertyName) throws ConfigInitializationException {
-        Map<String, String> propMap = values;
+    private void decryptPasswordProperty(Map<?, ?> values, String propertyName) throws ConfigInitializationException {
+        @SuppressWarnings("unchecked")
+        Map<String, String> propMap = (Map<String, String>)values;
         // initialize encryption
-        if (propMap.containsKey(propertyName)) {
+        if (propMap != null && propMap.containsKey(propertyName)) {
+            if (propMap.containsKey(propertyName + DECRYPTED_SUFFIX)) {
+                String decryptedPropValue = propMap.get(propertyName + DECRYPTED_SUFFIX);
+                String propValueToBeDecrypted = propMap.get(propertyName);
+                if (decryptedPropValue != null 
+                        && propValueToBeDecrypted != null
+                        && decryptedPropValue.equals(propValueToBeDecrypted)) {
+                    return; // do not decrypt an already decrypted value
+                }
+            }
             String propValue = decryptProperty(encrypter, propMap, propertyName, isBatchMode());
             if (propValue == null) propValue = "";
             propMap.put(propertyName, propValue);
+            
+            // cache decrypted value
+            propMap.put(propertyName + DECRYPTED_SUFFIX, propValue);
         }
     }
 
@@ -717,19 +1027,12 @@ public class Config {
      */
     public void loadParameterOverrides(Map<String, String> configOverrideMap) throws ParameterLoadException,
             ConfigInitializationException {
-        // Need to initialize last run date if it's present neither in config or override
-        if (configOverrideMap.containsKey(INITIAL_LAST_RUN_DATE)) {
-            lastRun.setDefault(LastRun.LAST_RUN_DATE, configOverrideMap.get(INITIAL_LAST_RUN_DATE));
-        }
-
-        // make sure to post process the args to be loaded
-        postLoad(configOverrideMap);
+        this.parameterOverridesMap = configOverrideMap;
+        // make sure to post-process the args to be loaded
+        postLoad(configOverrideMap, false);
 
         // replace values in the Config
         putValue(configOverrideMap);
-
-        // make sure that last run file gets the latest configuration
-        initLastRunFile();
     }
 
     /**
@@ -768,6 +1071,9 @@ public class Config {
      * @throws ConfigInitializationException
      */
     private void initEncryption(Map<String, String> values) throws ConfigInitializationException {
+        if (values == null) {
+            return;
+        }
         // initialize encrypter
         String keyFile = values.get(ENCRYPTION_KEY_FILE);
         if (keyFile != null && keyFile.length() != 0) {
@@ -812,6 +1118,9 @@ public class Config {
      * @param values Map of overriding values
      */
     public void putValue(Map<String, String> values) throws ParameterLoadException, ConfigInitializationException {
+        if (values == null) {
+            return;
+        }
         for (String key : values.keySet()) {
             putValue(key, values.get(key));
         }
@@ -834,21 +1143,31 @@ public class Config {
      * @throws java.io.IOException if there is a problem saving this store
      */
     public void save() throws IOException, GeneralSecurityException {
+        if (getString(Config.CLI_OPTION_RUN_MODE).equalsIgnoreCase(Config.RUN_MODE_BATCH_VAL)
+           || getBoolean(READ_ONLY_CONFIG_PROPERTIES)) {
+            return; // do not save any updates to config.properties file
+        }
         if (filename == null) {
             throw new IOException(Messages.getString("Config.fileMissing")); //$NON-NLS-1$
         }
 
-        // Secure password code prevents the saving of passwords
-        // no great way to do this,
-        String oldPassword = encryptProperty(PASSWORD);
-        String oldProxyPassword = encryptProperty(PROXY_PASSWORD);
-        String oauthAccessToken = getString(OAUTH_ACCESSTOKEN);
-        String oauthRefreshToken = getString(OAUTH_REFRESHTOKEN);
-        putValue(PASSWORD, "");
-        putValue(PROXY_PASSWORD, "");
-        putValue(OAUTH_ACCESSTOKEN, "");
-        putValue(OAUTH_REFRESHTOKEN, "");
-
+        Properties inMemoryProperties = new Properties();
+        inMemoryProperties.putAll(this.properties);
+        
+        // do not save properties set through parameter overrides
+        if (this.parameterOverridesMap != null) {
+            for (String propertyName : this.parameterOverridesMap.keySet()) {
+                this.properties.remove(propertyName);
+            }
+        }
+        // keep the property values for the read-only properties as retrieved from config.properties
+        for (String propertyName : READ_ONLY_PROPERTY_NAMES) {
+            this.restoreReadOnlyProperty(propertyName);
+        }
+        
+        removeUnsupportedProperties();
+        removeDecryptedProperties();
+        removeCLIOptionsFromProperties();
 
         FileOutputStream out = null;
         try {
@@ -859,35 +1178,56 @@ public class Config {
                 out.close();
             }
             // restore original property values
-            putValue(PASSWORD, oldPassword);
-            putValue(PROXY_PASSWORD, oldProxyPassword);
-            putValue(OAUTH_ACCESSTOKEN, oauthAccessToken);
-            putValue(OAUTH_REFRESHTOKEN, oauthRefreshToken);
-
+            properties = inMemoryProperties;
         }
         // save last run statistics
         lastRun.save();
     }
 
-
+    private void removeUnsupportedProperties() {
+        // do not save a value for enabling Bulk V2 
+        //this.properties.remove(BULKV2_API_ENABLED);
+    }
+    
+    private void removeDecryptedProperties() {
+        this.properties.remove(PASSWORD + DECRYPTED_SUFFIX);
+        this.properties.remove(PROXY_PASSWORD + DECRYPTED_SUFFIX);
+        this.properties.remove(OAUTH_ACCESSTOKEN + DECRYPTED_SUFFIX);
+        this.properties.remove(OAUTH_REFRESHTOKEN + DECRYPTED_SUFFIX);
+    }
+    
+    private void removeCLIOptionsFromProperties() {
+        Set<String> keys = this.properties.stringPropertyNames();
+        Field[] allFields = Config.class.getDeclaredFields();
+        for (Field field : allFields) {
+            if (field.getName().startsWith("CLI_OPTION_")) {
+                String fieldVal = null;
+                try {
+                    fieldVal = (String)field.get(null);
+                } catch (IllegalArgumentException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                } catch (IllegalAccessException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+                if (fieldVal == null) {
+                    continue;
+                }
+                for (String key : keys) {
+                    if (key.equalsIgnoreCase(fieldVal)) {
+                        this.properties.remove(key);
+                    }
+                }
+            }
+        }
+    }
+    
     /**
      * Save statistics from the last run
      */
     public void saveLastRun() throws IOException {
         lastRun.save();
-    }
-
-    /**
-     * @param propName name of the property
-     * @return old value of the property
-     */
-    private String encryptProperty(String propName) throws GeneralSecurityException, UnsupportedEncodingException {
-        String oldValue = getString(propName);
-        if (oldValue != null && oldValue.length() > 0) {
-
-            putValue(propName, encrypter.encryptMsg(oldValue));
-        }
-        return oldValue;
     }
 
     /**
@@ -908,7 +1248,7 @@ public class Config {
         for (String key : valueMap.keySet()) {
             // add comma for subsequent entries
             if (sb.length() != 0) {
-                sb.append(",");
+                sb.append(AppUtil.COMMA);
             }
             sb.append(key + "=" + valueMap.get(key));
         }
@@ -933,104 +1273,109 @@ public class Config {
         return filename;
     }
 
-
-    /**
-     * Sets a double
+    /*
+     * Sets a date
      */
-    public void setValue(String name, double value) {
-        setProperty(name, Double.toString(value));
+    public void setValue(String name, Date value) {
+        setValue(name, value, false);
+    }
+    
+    private void setValue(String name, Date value, boolean skipIfAlreadySet) {
+        setProperty(name, DATE_FORMATTER.format(value), skipIfAlreadySet);
     }
 
     /**
-     * Sets a float
-     */
-    public void setValue(String name, float value) {
-        setProperty(name, Float.toString(value));
-    }
-
-    /**
-     * Sets an int
-     */
-    public void setValue(String name, int value) {
-        setProperty(name, Integer.toString(value));
-    }
-
-    /**
-     * Sets a long
-     */
-    public void setValue(String name, long value) {
-        setProperty(name, Long.toString(value));
-    }
-
-    /**
-     * Sets a string
+     * Sets a list of String values
      */
     public void setValue(String name, String... values) {
+        setValue(name, false, values);
+    }
+    
+    private void setValue(String name,  boolean skipIfAlreadySet, String... values) {
         if (values != null && values.length > 1) {
-            StringJoiner joiner = new StringJoiner(",");
+            StringJoiner joiner = new StringJoiner(AppUtil.COMMA);
             for (String value : values) {
                 joiner.add(value);
             }
-            setProperty(name, joiner.toString());
+            setProperty(name, joiner.toString(), skipIfAlreadySet);
         } else if (values != null && values.length > 0) {
-            setProperty(name, values[0]);
+            setProperty(name, values[0], skipIfAlreadySet);
         } else {
-            setProperty(name, null);
+            setProperty(name, null, skipIfAlreadySet);
         }
 
     }
 
     /**
-     * Sets a boolean
+     * Sets a value other than a date or a list of String values
      */
-    public void setValue(String name, boolean value) {
-        setProperty(name, Boolean.toString(value));
+    public <T> void setValue(String name, T value) {
+        setValue(name, value, false);
     }
 
-    public void setValue(String name, Date value) {
-        setProperty(name, DATE_FORMATTER.format(value));
+    
+    private <T> void setDefaultValue(String name, T value) {
+        setValue(name, value, true);
     }
-
+    
+    private <T> void setValue(String name, T value, boolean skipIfAlreadySet) {
+        if (value != null) {
+            setProperty(name, value.toString(), skipIfAlreadySet);
+        }
+    }
+    
     /**
      * @param name
      * @param newValue
      */
-    private void setProperty(String name, String newValue) {
+    private void setProperty(String name, String newValue, boolean skipIfAlreadySet) {
         final String oldValue = getString(name);
+        if (skipIfAlreadySet && oldValue != null && !oldValue.isEmpty()) {
+            // do not override the old value
+            return;
+        }
         final boolean paramChanged = (oldValue == null || oldValue.length() == 0) ? (newValue != null && newValue
                 .length() > 0) : !oldValue.equals(newValue);
         if (paramChanged) {
-            this.dirty = true;
-            configChanged(name, oldValue, newValue);
-            if (lastRun.hasParameter(name)) {
-                lastRun.put(name, newValue);
-            } else {
-                properties.put(name, newValue);
-            }
-
+            doSetPropertyAndUpdateConfig(name, oldValue, newValue);
+        }
+    }
+    
+    private void doSetPropertyAndUpdateConfig(String name, String oldValue, String newValue) {
+        this.dirty = true;
+        configChanged(name, oldValue, newValue);
+        if (lastRun != null && lastRun.hasParameter(name)) {
+            lastRun.put(name, newValue);
+        } else {
+            properties.put(name, newValue);
         }
     }
 
     public boolean isBatchMode() {
-        return isBatchMode;
-    }
-
-    public void setBatchMode(boolean isBatchMode) {
-        this.isBatchMode = isBatchMode;
+        return (Config.RUN_MODE_BATCH_VAL.equalsIgnoreCase(getString(Config.CLI_OPTION_RUN_MODE)));
     }
 
     public int getLoadBatchSize() {
         boolean bulkApi = isBulkAPIEnabled();
+        boolean bulkV2Api = this.isBulkV2APIEnabled();
+        
+        if (bulkApi && bulkV2Api) {
+            return MAX_BULKV2_API_JOB_SIZE;
+        }
+        
         int bs = -1;
         try {
             bs = getInt(LOAD_BATCH_SIZE);
         } catch (ParameterLoadException e) {
         }
         int maxBatchSize = bulkApi ? MAX_BULK_API_BATCH_SIZE : MAX_LOAD_BATCH_SIZE;
-        return bs > maxBatchSize ? maxBatchSize : bs > 0 ? bs : getDefaultBatchSize(bulkApi);
+        return bs > maxBatchSize ? maxBatchSize : bs > 0 ? bs : getDefaultBatchSize(bulkApi, bulkV2Api);
     }
 
-    public int getDefaultBatchSize(boolean bulkApi) {
+    public int getDefaultBatchSize(boolean bulkApi, boolean bulkV2Api) {
+        if (bulkApi && bulkV2Api) {
+            return MAX_BULKV2_API_JOB_SIZE;
+        }
         return bulkApi ? DEFAULT_BULK_API_BATCH_SIZE : DEFAULT_LOAD_BATCH_SIZE;
     }
 
@@ -1041,6 +1386,10 @@ public class Config {
     public boolean isBulkAPIEnabled() {
         return getBoolean(BULK_API_ENABLED);
     }
+    
+    public boolean isBulkV2APIEnabled() {
+        return isBulkAPIEnabled() && getBoolean(BULKV2_API_ENABLED);
+    }
 
     private boolean isBulkApiOperation() {
         return getOperationInfo().bulkAPIEnabled();
@@ -1050,11 +1399,53 @@ public class Config {
         return getEnum(OperationInfo.class, OPERATION);
     }
 
-    private static final Charset UTF8 = Charset.forName("UTF-8");
-
-    public String getCsvWriteEncoding() {
-        if (Charset.defaultCharset().equals(UTF8) || getBoolean(WRITE_UTF8)) return UTF8.name();
-        return Charset.defaultCharset().name();
+    public String getCsvEncoding(boolean isWrite) {
+        // charset is for CSV read unless isWrite is set to true
+        String configProperty = READ_UTF8;
+        if (isWrite) {
+            configProperty = WRITE_UTF8;
+            logger.debug("Getting charset for writing to CSV");
+        } else {
+            logger.debug("Getting charset for reading from CSV");
+        }
+        if (getBoolean(configProperty)) {
+            logger.debug("Using UTF8 charset because '" 
+                    +  configProperty
+                    +"' is set to true");
+            return StandardCharsets.UTF_8.name();
+        }
+        if (!isWrite) {
+            String charset = getString(READ_CHARSET);
+            if (charset != null && !charset.isEmpty()) {
+                return charset;
+            }
+        }
+        String charset = getDefaultCharsetForCsvReadWrite();
+        logger.debug("Using charset " + charset);
+        return charset;
+    }
+    
+    private static String defaultCharsetForCsvReadWrite = null;
+    private synchronized static String getDefaultCharsetForCsvReadWrite() {
+        if (defaultCharsetForCsvReadWrite != null) {
+            return defaultCharsetForCsvReadWrite;
+        }
+        String fileEncodingStr = System.getProperty("file.encoding");
+        if (fileEncodingStr != null && !fileEncodingStr.isBlank()) {
+            for (String charsetName : Charset.availableCharsets().keySet()) {
+                if (fileEncodingStr.equalsIgnoreCase(charsetName)) {
+                    logger.debug("Setting the default charset for CSV read and write to the value of file.encoding system property: " + fileEncodingStr);
+                    defaultCharsetForCsvReadWrite = charsetName; 
+                    return charsetName;
+                }
+            }
+            logger.debug("Unable to find the charset '"
+                    + fileEncodingStr
+                    + "' specified in file.encoding system property among available charsets for the Java VM." );
+        }
+        logger.debug("Using JVM default charset as the default charset for CSV read and write : " + Charset.defaultCharset().name());
+        defaultCharsetForCsvReadWrite = Charset.defaultCharset().name();
+        return defaultCharsetForCsvReadWrite;
     }
 
     private final List<ConfigListener> listeners = new ArrayList<ConfigListener>();
@@ -1079,6 +1470,20 @@ public class Config {
 
     public void setOAuthEnvironment(String environment) {
         String clientId;
+        if (environment == null || environment.isBlank()) {
+            environment = OAUTH_PROD_ENVIRONMENT_VAL;
+        }
+        String[] envArray = getString(OAUTH_ENVIRONMENTS).split(",");
+        boolean isEnvMatch = false;
+        for (String env : envArray) {
+            env = env.strip();
+            if (env.equalsIgnoreCase(environment)) {
+                isEnvMatch = true;
+            }
+        }
+        if (!isEnvMatch) {
+            environment = OAUTH_PROD_ENVIRONMENT_VAL;
+        }
         if (getBoolean(BULK_API_ENABLED)) {
             clientId = getOAuthEnvironmentString(environment, OAUTH_PARTIAL_BULK_CLIENTID);
         } else {
@@ -1093,7 +1498,107 @@ public class Config {
         setValue(OAUTH_CLIENTSECRET, getOAuthEnvironmentString(environment, OAUTH_PARTIAL_CLIENTSECRET));
         setValue(OAUTH_REDIRECTURI, getOAuthEnvironmentString(environment, OAUTH_PARTIAL_REDIRECTURI));
     }
+    
+    /**
+     * Create folder provided from the parameter
+     *
+     * @param dirPath - folder to be created
+     * @return True if folder was created successfully or folder already existed False if
+     * folder was failed to create
+     */
+    private static boolean createDir(File dirPath) {
+        boolean isSuccessful = true;
+        if (!dirPath.exists() || !dirPath.isDirectory()) {
+            isSuccessful = dirPath.mkdirs();
+            if (isSuccessful) {
+                logger.info("Created config folder: " + dirPath);
+            } else {
+                logger.info("Unable to create config folder: " + dirPath);
+            }
+        } else {
+            logger.info("Config folder already exists: " + dirPath);
+        }
+        return isSuccessful;
+    }
 
+    /**
+     * Get the current config.properties and load it into the config bean.
+     * @throws ConfigInitializationException 
+     * @throws IOException 
+     * @throws FactoryConfigurationError 
+     */
+    public static synchronized Config getInstance(Map<String, String> argMap) throws ConfigInitializationException, FactoryConfigurationError, IOException { 
+        AppUtil.initializeAppConfig(AppUtil.convertCommandArgsMapToArgsArray(argMap));
+        logger = LogManager.getLogger(Config.class);
+
+        String configurationsDirPath = AppUtil.getConfigurationsDir();
+        File configurationsDir;
+        final String DEFAULT_CONFIG_FILE = "defaultConfig.properties"; //$NON-NLS-1$
+
+        configurationsDir = new File(configurationsDirPath);
+ 
+        // Create dir if it doesn't exist
+        boolean isMkdirSuccessfulOrExisting = createDir(configurationsDir);
+        if (!isMkdirSuccessfulOrExisting) {
+            String errorMsg = Messages.getMessage(Config.class, "errorCreatingOutputDir", configurationsDirPath);
+            logger.error(errorMsg);
+            throw new ConfigInitializationException(errorMsg);
+        }
+
+        // check if the config file exists
+        File configFile = new File(configurationsDir.getAbsolutePath(), CONFIG_FILE);
+
+        String configFilePath = configFile.getAbsolutePath();
+        logger.info("Looking for file in config path: " + configFilePath);
+        if (!configFile.exists()) {
+
+            File defaultConfigFile = new File(configurationsDir, DEFAULT_CONFIG_FILE);
+            logger.debug("Looking for file in config file " + defaultConfigFile.getAbsolutePath());
+            // If default config exists, copy the default to user config
+            // If doesn't exist, create a blank user config
+
+            if (defaultConfigFile.exists()) {
+                try {
+                    // Copy default config to user config
+                    logger.info(String.format("User config file does not exist in '%s' Default config file is copied from '%s'",
+                            configFilePath, defaultConfigFile.getAbsolutePath()));
+                    Files.copy(defaultConfigFile.toPath(), configFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                } catch (IOException e) {
+                    String errorMsg = String.format("Failed to copy '%s' to '%s'", defaultConfigFile.getAbsolutePath(), configFile);
+                    logger.warn(errorMsg, e);
+                    throw new ConfigInitializationException(errorMsg, e);
+                }
+            } else {
+                // extract from the jar
+                try {
+                    AppUtil.extractFromJar("/" + CONFIG_FILE, configFile);
+                } catch (IOException e) {
+                    // TODO Auto-generated catch block
+                    logger.error("Unable to extract " + CONFIG_FILE + " from jar " + e.getMessage());
+                }
+            }
+            configFile.setWritable(true);
+            configFile.setReadable(true);
+        } else {
+            logger.info("User config is found in " + configFile.getAbsolutePath());
+        }
+
+        Config config = null;
+        try {
+            config = new Config(configFilePath, argMap);
+            currentConfig = config;
+            logger.info(Messages.getMessage(Config.class, "configInit")); //$NON-NLS-1$
+        } catch (IOException | ProcessInitializationException e) {
+            throw new ConfigInitializationException(Messages.getMessage(Config.class, "errorConfigLoad", configFilePath), e);
+        }
+        return config;
+    }
+    
+    private static Config currentConfig = null;
+    public static Config getCurrentConfig() {
+        return currentConfig;
+    }
+    
     public static interface ConfigListener {
         void configValueChanged(String key, String oldValue, String newValue);
     }

@@ -25,12 +25,13 @@
  */
 package com.salesforce.dataloader;
 
-import com.salesforce.dataloader.client.ClientBase;
+import com.salesforce.dataloader.client.BulkV1Client;
+import com.salesforce.dataloader.client.PartnerClient;
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.controller.Controller;
-import com.salesforce.dataloader.exception.ControllerInitializationException;
 import com.salesforce.dataloader.exception.PasswordExpiredException;
+import com.salesforce.dataloader.util.AppUtil;
 import com.sforce.soap.partner.Connector;
 import com.sforce.soap.partner.LoginResult;
 import com.sforce.soap.partner.PartnerConnection;
@@ -54,11 +55,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Pattern;
+
+import javax.xml.parsers.FactoryConfigurationError;
 
 /**
  * This class represents the base class for all data loader JUnit tests. TODO: ProcessScheduler test? TODO: Encryption
@@ -68,15 +71,55 @@ import java.util.regex.Pattern;
  * @author Alex Warshavsky
  * @since 8.0
  */
-public abstract class TestBase {
+abstract class TestBase {
 
     private static final Pattern INSIDE_BRACKETS_TEST_PARAMETERS = Pattern.compile("\\[.+\\]");
     @Rule
     public TestName testName = new TestName();
+    
+    /* *********
+     * Start of the section declaring
+     * static variables that need to be initialized after loading test properties
+     * *********
+     */
     private static final Properties TEST_PROPS;
+    private static final String TEST_FILES_DIR;
+    protected static final String TEST_CONF_DIR;
+    private static final String TEST_DATA_DIR;
+    private static final String TEST_STATUS_DIR;
 
+    protected static final String DEFAULT_ACCOUNT_EXT_ID_FIELD;
+
+    // logger
+    private static Logger logger;
+    /* *********
+     * End of the section declaring
+     * static variables that need to be initialized after loading test properties
+     * *********
+     */
+    
     static {
+        // initialize the static variables that are dependent on test properties.
         TEST_PROPS = loadTestProperties();
+        TEST_FILES_DIR = getProperty("testfiles.dir");
+        TEST_CONF_DIR = TEST_FILES_DIR + File.separator + "conf";
+        TEST_PROPS.put(AppUtil.CLI_OPTION_CONFIG_DIR_PROP, TEST_CONF_DIR);
+        TEST_DATA_DIR = TEST_FILES_DIR + File.separator + "data";
+        TEST_STATUS_DIR = TEST_FILES_DIR + File.separator + "status";
+        DEFAULT_ACCOUNT_EXT_ID_FIELD = getProperty("test.account.extid");
+        
+        Map<String, String> argsMap = new HashMap<String, String>();
+        argsMap.put(AppUtil.CLI_OPTION_CONFIG_DIR_PROP, getTestConfDir());
+        try {
+            AppUtil.initializeAppConfig(AppUtil.convertCommandArgsMapToArgsArray(argsMap));
+        } catch (FactoryConfigurationError e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (Exception e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        logger = LogManager.getLogger(TestBase.class);
     }
 
     private static Properties loadTestProperties() {
@@ -100,40 +143,41 @@ public abstract class TestBase {
         return TEST_PROPS.getProperty(testProperty);
     }
 
-    private static final String API_CLIENT_NAME = "DataLoaderBatch/" + Controller.APP_VERSION;
+    private static final String API_CLIENT_NAME = "DataLoaderTestBatch/" + Controller.APP_VERSION;
 
-    private static final String TEST_FILES_DIR = getProperty("testfiles.dir");
-    private static final String TEST_CONF_DIR = TEST_FILES_DIR + File.separator + "conf";
-    private static final String TEST_DATA_DIR = TEST_FILES_DIR + File.separator + "data";
-    private static final String TEST_STATUS_DIR = TEST_FILES_DIR + File.separator + "status";
-
-    protected static final String DEFAULT_ACCOUNT_EXT_ID_FIELD = getProperty("test.account.extid");
     protected static final String DEFAULT_CONTACT_EXT_ID_FIELD = "NumberId__c";
 
     protected static final String ACCOUNT_NUMBER_PREFIX = "ACCT";
     protected static final String ACCOUNT_WHERE_CLAUSE = "AccountNumber__c like '" + ACCOUNT_NUMBER_PREFIX + "%'";
     protected static final String CONTACT_TITLE_PREFIX = "CONTTL";
     protected static final String CONTACT_WHERE_CLAUSE = "Title like '" + CONTACT_TITLE_PREFIX + "%'";
+    protected static final String TESTFIELD_FIELD_PREFIX = "testfield__";
+    protected static final String TESTFIELD_WHERE_CLAUSE = "TestField__c like '" + TESTFIELD_FIELD_PREFIX + "%'";
     protected static final int SAVE_RECORD_LIMIT = 200;
-
-    // logger
-    private static Logger logger = LogManager.getLogger(TestBase.class);
 
     protected String baseName; // / base name of the test (without the "test")
     private Controller controller;
     String oldThreadName;
-    PartnerConnection binding;
-
+    PartnerConnectionForTest binding;
+    
     @Before
     public void basicSetUp() throws Exception {
         File testStatusDir = new File(TEST_STATUS_DIR);
         if (!testStatusDir.exists()) testStatusDir.mkdirs();
 
         // reset binding
+        if (this.binding != null) {
+            this.binding.cleanup();
+        }
         this.binding = null;
-
         setupTestName();
-        setupController();
+    }
+    
+    @After
+    public void cleanup() {
+        if (this.controller != null && this.binding != null) {
+            this.binding.cleanup();
+        }
     }
 
     private void setupTestName() {
@@ -149,17 +193,16 @@ public abstract class TestBase {
         Thread.currentThread().setName(testName.getMethodName());
     }
 
-    protected void setupController() {
+    protected void setupController(Map<String, String> configOverrideMap) {
         // configure the Controller to point to our testing config
-        if (!System.getProperties().contains(Controller.CONFIG_DIR_PROP))
-            System.setProperty(Controller.CONFIG_DIR_PROP, getTestConfDir());
+        configOverrideMap.put(Config.READ_ONLY_CONFIG_PROPERTIES, Boolean.TRUE.toString());
+        if (!System.getProperties().contains(AppUtil.CLI_OPTION_CONFIG_DIR_PROP))
+            System.setProperty(AppUtil.CLI_OPTION_CONFIG_DIR_PROP, getTestConfDir());
 
-        if (controller == null) {
-            try {
-                controller = Controller.getInstance(testName.getMethodName(), true, null);
-            } catch (ControllerInitializationException e) {
-                fail("While initializing controller instance", e);
-            }
+        try {
+            controller = Controller.getInstance(configOverrideMap);
+        } catch (Exception e) {
+            fail("While initializing controller instance", e);
         }
     }
 
@@ -179,31 +222,54 @@ public abstract class TestBase {
         return controller;
     }
 
+    String apiVersionForTheSession = null;
     /**
      * @return PartnerConnection - binding to use to call the salesforce API
      */
-    protected PartnerConnection getBinding() {
+    protected PartnerConnectionForTest getBinding() {
         if(binding != null) {
             return binding;
         }
-        ConnectorConfig bindingConfig = getWSCConfig();
-        logger.info("Getting binding for URL: " + bindingConfig.getAuthEndpoint());
-        binding = newConnection(bindingConfig, 0);
+        ConnectorConfig bindingConfig;
+        
+        if (this.apiVersionForTheSession == null) {
+            String apiVersionToTry = PartnerClient.getCurrentAPIVersionInWSC();
+            bindingConfig = getWSCConfig(apiVersionToTry);
+            logger.info("Getting binding for URL: " + bindingConfig.getAuthEndpoint());
+            binding = newConnection(bindingConfig, 0, 0);
+            if (binding == null) {
+                logger.error("Failed to invoke server APIs of version " + apiVersionToTry);
+                apiVersionToTry = PartnerClient.getPreviousAPIVersionInWSC();
+                bindingConfig = getWSCConfig(apiVersionToTry);
+                logger.info("Getting binding for URL: " + bindingConfig.getAuthEndpoint());
+                binding = newConnection(bindingConfig, 0, 0);
+                if (binding == null) {
+                    fail("Error logging in and getting a service binding for API version " + apiVersionToTry, new Exception());
+                }
+                this.apiVersionForTheSession = apiVersionToTry;
+            }
+        } else {
+            bindingConfig = getWSCConfig(this.apiVersionForTheSession);
+            logger.info("Getting binding for URL: " + bindingConfig.getAuthEndpoint());
+            binding = newConnection(bindingConfig, 0, 3);
+            if (binding == null) {
+                fail("Error logging in and getting a service binding for API version " + this.apiVersionForTheSession, new Exception());
+            }
+        }
         return binding;
     }
 
-    protected ConnectorConfig getWSCConfig() {
+    protected ConnectorConfig getWSCConfig(String apiVersionStr) {
         ConnectorConfig bindingConfig = new ConnectorConfig();
         bindingConfig.setUsername(getController().getConfig().getString(Config.USERNAME));
         bindingConfig.setPassword(getController().getConfig().getString(Config.PASSWORD));
         String configEndpoint = getController().getConfig().getString(Config.ENDPOINT);
         if (!configEndpoint.equals("")) { //$NON-NLS-1$
-            String serverPath;
             try {
-                serverPath = new URI(Connector.END_POINT).getPath();
-                bindingConfig.setAuthEndpoint(configEndpoint + serverPath);
-                bindingConfig.setServiceEndpoint(configEndpoint + serverPath);
-                bindingConfig.setRestEndpoint(configEndpoint + ClientBase.REST_ENDPOINT);
+                PartnerClient.setAPIVersion(apiVersionStr);
+                bindingConfig.setAuthEndpoint(configEndpoint + PartnerClient.getServicePath());
+                bindingConfig.setServiceEndpoint(configEndpoint + PartnerClient.getServicePath()); // Partner SOAP service
+                bindingConfig.setRestEndpoint(configEndpoint + BulkV1Client.getServicePath());  // REST service: Bulk v1       
                 bindingConfig.setManualLogin(true);
                 // set long timeout for tests with larger data sets
                 bindingConfig.setReadTimeout(5 * 60 * 1000);
@@ -219,7 +285,7 @@ public abstract class TestBase {
                         }
                     }
                 }
-            } catch (URISyntaxException e) {
+            } catch (Exception e) {
                 Assert.fail("Error parsing endpoint URL: " + Connector.END_POINT + ", error: " + e.getMessage());
             }
         }
@@ -231,7 +297,7 @@ public abstract class TestBase {
      * @return PartnerConnection
      * @throws com.sforce.ws.ConnectionException
      */
-    private PartnerConnection newConnection(ConnectorConfig bindingConfig, int retries) {
+    private PartnerConnectionForTest newConnection(ConnectorConfig bindingConfig, int retries, int maxRetries) {
         try {
             PartnerConnection newBinding = Connector.newConnection(bindingConfig);
 
@@ -248,14 +314,13 @@ public abstract class TestBase {
                 newBinding.setSessionHeader(loginResult.getSessionId());
                 bindingConfig.setServiceEndpoint(loginResult.getServerUrl());
             }
-            return newBinding;
+            return new PartnerConnectionForTest(newBinding);
         } catch (ConnectionException e) {
             // in case of exception try to get a connection again
-            if (retries < 3) {
+            if (retries < maxRetries) {
                 retries++;
-                return newConnection(bindingConfig, retries);
+                return newConnection(bindingConfig, retries, maxRetries);
             }
-            fail("Error getting web service proxy binding", e);
         }
         // make eclipse happy
         return null;
@@ -269,7 +334,7 @@ public abstract class TestBase {
         return getTestFile(path).getAbsolutePath();
     }
 
-    protected String getTestConfDir() {
+    protected static String getTestConfDir() {
         return TEST_CONF_DIR;
     }
 
@@ -288,7 +353,7 @@ public abstract class TestBase {
     /**
      * @param e
      */
-    protected PartnerConnection checkBinding(int retries, ApiFault e) {
+    protected PartnerConnectionForTest checkBinding(int retries, ApiFault e) {
         logger.info("Retry#" + retries + " getting a binding after an error.  Code: " + e.getExceptionCode().toString()
                 + ", detail: " + e.getExceptionMessage());
         if (retries < 3) // && (e.getExceptionCode() == ExceptionCode.INVALID_SESSION_ID ||
@@ -313,5 +378,4 @@ public abstract class TestBase {
         t.printStackTrace(new PrintWriter(stackTrace));
         fail("Unexpected exception of type " + t.getClass().getCanonicalName(), t);
     }
-
 }

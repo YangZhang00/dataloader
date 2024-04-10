@@ -29,6 +29,8 @@ import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 
 import com.salesforce.dataloader.model.Row;
+import com.salesforce.dataloader.util.DateOnlyCalendar;
+
 import org.apache.commons.beanutils.*;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
@@ -40,6 +42,7 @@ import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.exception.LoadException;
 import com.salesforce.dataloader.exception.ParameterLoadException;
+import com.salesforce.dataloader.exception.RelationshipFormatException;
 import com.sforce.soap.partner.*;
 import com.sforce.soap.partner.sobject.SObject;
 
@@ -76,22 +79,41 @@ public class SforceDynaBean {
         for (Field field : fields) {
             String fieldName = field.getName();
             //see which class type equals the field type
-            Class classType = getConverterClass(field);
+            Class<?> classType = getConverterClass(field);
             dynaProps.add(new DynaProperty(fieldName, classType));
 
             // if field is a reference to another object, remember the reference
             // NOTE: currently only fields with one reference are supported on the server
             FieldType fieldType = field.getType();
             String relationshipName = field.getRelationshipName();
-            if (fieldType == FieldType.reference && field.getReferenceTo().length == 1 &&
+            if (fieldType == FieldType.reference &&
                     relationshipName != null && relationshipName.length() > 0) {
-
-                DescribeRefObject refInfo = controller.getReferenceDescribes().get(relationshipName);
-                if(refInfo != null) {
-                    for(String refFieldName : refInfo.getFieldInfoMap().keySet()) {
-                        // property name contains information for mapping
-                        dynaProps.add(new DynaProperty(ObjectField.formatAsString(relationshipName, refFieldName),
-                                SObjectReference.class));
+                for (String parentName : field.getReferenceTo()) {
+                    ParentSObjectFormatter parentHandleForRelationship;
+                    try {
+                        parentHandleForRelationship = new ParentSObjectFormatter(parentName, relationshipName);
+                    } catch (RelationshipFormatException e) {
+                        logger.error(e.getMessage());
+                        continue;
+                    }
+                    DescribeRefObject parent = controller.getReferenceDescribes().getParentSObject(parentHandleForRelationship.toString());
+                    if(parent != null) {
+                        for(String refFieldName : parent.getParentObjectFieldMap().keySet()) {
+                            // property name contains information for mapping
+                            // add old format to dyna props
+                            try {
+                                dynaProps.add(new DynaProperty(
+                                                new ParentIdLookupFieldFormatter(null, relationshipName, refFieldName).toString(),
+                                                SObjectReference.class));
+                                dynaProps.add(new DynaProperty(
+                                        new ParentIdLookupFieldFormatter(parent.getParentObjectName(), relationshipName, refFieldName).toString(),
+                                        SObjectReference.class));
+                             } catch (RelationshipFormatException e) {
+                                // TODO Auto-generated catch block
+                               logger.error(e.getMessage());
+                            }
+                            // add new format to dyna props
+                       }
                     }
                 }
             }
@@ -131,7 +153,7 @@ public class SforceDynaBean {
             classType = Boolean.class;
             break;
         case date:
-            classType = Calendar.class;
+            classType = Date.class;
             break;
         case base64Binary:
             classType = byte[].class;
@@ -174,7 +196,7 @@ public class SforceDynaBean {
             classType = Boolean.class;
             break;
         case date:
-            classType = Calendar.class;
+            classType = DateOnlyCalendar.class;
             break;
         case base64Binary:
             classType = byte[].class;
@@ -207,7 +229,6 @@ public class SforceDynaBean {
         DynaBean sforceObj = null;
         try {
             sforceObj = dynaClass.newInstance();
-
             //This does an automatic conversion of types.
             BeanUtils.copyProperties(sforceObj, sforceDataRow);
             return sforceObj;
@@ -284,7 +305,6 @@ public class SforceDynaBean {
      * @throws NoSuchMethodException
      * @throws ParameterLoadException
      */
-    @SuppressWarnings("unchecked")
     public static SObject getSObject(Controller controller, String entityName, DynaBean dynaBean) throws IllegalAccessException, InvocationTargetException, NoSuchMethodException, ParameterLoadException {
         SObject sObj = new SObject();
         sObj.setType(entityName);
@@ -297,7 +317,7 @@ public class SforceDynaBean {
                     SObjectReference sObjRef = (SObjectReference)value;
                     if (!sObjRef.isNull()) sObjRef.addReferenceToSObject(controller, sObj, fName);
                 } else {
-                    sObj.setField(fName, dynaBean.get(fName));
+                    sObj.setField(fName, value);
                 }
             }
         }
@@ -312,9 +332,10 @@ public class SforceDynaBean {
         final boolean useEuroDates = cfg.getBoolean(Config.EURO_DATES);
         final TimeZone tz = cfg.getTimeZone();
         // Register DynaBean type conversions
-        ConvertUtils.register(new DateConverter(tz, useEuroDates), Calendar.class);
+        ConvertUtils.register(new DateTimeConverter(tz, useEuroDates), Calendar.class);
+        ConvertUtils.register(new DateOnlyConverter(tz, useEuroDates), DateOnlyCalendar.class);
         ConvertUtils.register(new DoubleConverter(), Double.class);
-        ConvertUtils.register(new IntegerConverter(null), Integer.class);
+        ConvertUtils.register(new IntegerConverter(), Integer.class);
         ConvertUtils.register(new BooleanConverter(), Boolean.class);
         ConvertUtils.register(new StringConverter(), String.class);
         ConvertUtils.register(new FileByteArrayConverter(), byte[].class);

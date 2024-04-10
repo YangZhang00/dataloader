@@ -38,6 +38,7 @@ import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.exception.ParameterLoadException;
 import com.sforce.soap.partner.Connector;
+import com.sforce.soap.partner.GetUserInfoResult;
 import com.sforce.ws.ConnectorConfig;
 
 /**
@@ -46,7 +47,7 @@ import com.sforce.ws.ConnectorConfig;
  * @author Colin Jarvis
  * @since 17.0
  */
-public abstract class ClientBase<ClientType> {
+public abstract class ClientBase<ConnectionType> {
 
     private static Logger LOG = LogManager.getLogger(PartnerClient.class);
 
@@ -62,7 +63,9 @@ public abstract class ClientBase<ClientType> {
         DEFAULT_AUTH_ENDPOINT_URL = loginUrl;
     }
 
-    public static final String REST_ENDPOINT = "/services/async/" + Controller.API_VERSION;
+    public static final String BULKV1_ENDPOINT_PATH = "/services/async/" + getCurrentAPIVersionInWSC();
+    public static final String BULKV2_ENDPOINT_PATH = "/services/data/v" + getCurrentAPIVersionInWSC() + "/jobs/";
+    protected static String apiVersionForTheSession = getCurrentAPIVersionInWSC();
 
     protected final Logger logger;
     protected final Controller controller;
@@ -72,12 +75,16 @@ public abstract class ClientBase<ClientType> {
 
     protected abstract boolean connectPostLogin(ConnectorConfig connectorConfig);
 
-    public abstract ClientType getClient();
+    public abstract ConnectionType getConnection();
 
     protected ClientBase(Controller controller, Logger logger) {
         this.controller = controller;
         this.config = controller.getConfig();
         this.logger = logger;
+        String apiVersionStr = config.getString(Config.API_VERSION_PROP);
+        if (apiVersionStr != null && !apiVersionStr.isEmpty()) {
+            apiVersionForTheSession = apiVersionStr;
+        }
     }
 
     public final boolean connect(SessionInfo sess) {
@@ -91,18 +98,32 @@ public abstract class ClientBase<ClientType> {
     private static final String BATCH_CLIENT_STRING = "Batch";
     private static final String UI_CLIENT_STRING = "UI";
 
-    protected static String getClientName(Config cfg) {
-        final String apiType = cfg.isBulkAPIEnabled() ? BULK_API_CLIENT_TYPE : PARTNER_API_CLIENT_TYPE;
+    public static String getClientName(Config cfg) {
+        String apiType = cfg.isBulkAPIEnabled() ? BULK_API_CLIENT_TYPE : PARTNER_API_CLIENT_TYPE;
         final String interfaceType = cfg.isBatchMode() ? BATCH_CLIENT_STRING : UI_CLIENT_STRING;
+        if (cfg.isBulkAPIEnabled() && cfg.isBulkV2APIEnabled()) {
+            apiType = apiType + "v2";
+        }
         return new StringBuilder(32).append(BASE_CLIENT_NAME).append(apiType).append(interfaceType)
-                .append("/").append(Controller.API_VERSION).toString(); //$NON-NLS-1$
+                .append("/")
+                .append(Controller.APP_VERSION)
+                .toString(); //$NON-NLS-1$
+    }
+    
+    public static String getAPIVersion() {
+        return apiVersionForTheSession;
+    }
+    
+    public static synchronized void setAPIVersion(String version) {
+        apiVersionForTheSession = version;
     }
 
-    protected ConnectorConfig getConnectorConfig() {
+    public ConnectorConfig getConnectorConfig() {
         ConnectorConfig cc = new ConnectorConfig();
         cc.setTransport(HttpClientTransport.class);
         cc.setSessionId(getSessionId());
-        
+        cc.setRequestHeader("Sforce-Call-Options",
+                "client=" + ClientBase.getClientName(this.config));      
         // set authentication credentials
         // blank username is not acceptible
         String username = config.getString(Config.USERNAME);
@@ -187,15 +208,37 @@ public abstract class ClientBase<ClientType> {
                 }
             }
         }
-
         String server = getSession().getServer();
         if (server != null) {
-            cc.setAuthEndpoint(server + DEFAULT_AUTH_ENDPOINT_URL.getPath());
-            cc.setServiceEndpoint(server + DEFAULT_AUTH_ENDPOINT_URL.getPath());
-            cc.setRestEndpoint(server + REST_ENDPOINT);
+            cc.setAuthEndpoint(server + PartnerClient.getServicePath());
+            cc.setServiceEndpoint(server + PartnerClient.getServicePath()); // Partner SOAP service
+            cc.setRestEndpoint(server + BulkV1Client.getServicePath());  // REST service: Bulk v1
         }
-
         return cc;
+    }
+    
+    public static String getCurrentAPIVersionInWSC() {
+        String[] connectURLArray = Connector.END_POINT.split("\\/");
+        return connectURLArray[connectURLArray.length-1];
+    }
+    
+    public static String getPreviousAPIVersionInWSC() {
+        String currentAPIVersion = getCurrentAPIVersionInWSC();
+        String[] versionStrArray = currentAPIVersion.split("\\.");
+        String currentMajorVerStr = versionStrArray[0];
+        int currentMajorVer = Integer.parseInt(currentMajorVerStr);
+        return Integer.toString(currentMajorVer-1) + ".0";
+    }
+    
+    // used for SOAP and Bulk v1 service endpoints but not for bulk v2 service
+    protected static String getServicePathWithAPIVersion(String path) {
+        String[] pathPartArray = path.split("\\/");
+        pathPartArray[pathPartArray.length-1] = apiVersionForTheSession;
+        StringBuffer buf = new StringBuffer();
+        for (int i = 0; i < pathPartArray.length; i++) {
+            buf.append(pathPartArray[i] + "/");
+        }
+        return buf.toString();
     }
 
     public SessionInfo getSession() {
@@ -206,9 +249,9 @@ public abstract class ClientBase<ClientType> {
         setSession(new SessionInfo());
     }
 
-    protected void setSession(String sessionId, String server) {
+    protected void setSession(String sessionId, String server, GetUserInfoResult userInfo) {
 
-        setSession(new SessionInfo(sessionId, server));
+        setSession(new SessionInfo(sessionId, server, userInfo));
     }
 
     private void setSession(SessionInfo sess) {

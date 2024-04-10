@@ -26,6 +26,9 @@
 
 package com.salesforce.dataloader.action.visitor;
 
+import java.io.InputStream;
+import java.util.Map;
+
 /**
  * Interface that all visitors should implement
  * 
@@ -34,10 +37,12 @@ package com.salesforce.dataloader.action.visitor;
  */
 public interface IVisitor {
 
-    int getNumberErrors();
+    long getNumberErrors();
 
-    int getNumberOfRows();
+    long getNumberOfRows();
 
-    int getNumberSuccesses();
+    long getNumberSuccesses();
+
+    Map<String, InputStream> getAttachments();
 
 }

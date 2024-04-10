@@ -30,8 +30,12 @@ import org.eclipse.jface.viewers.ILabelProviderListener;
 import org.eclipse.jface.viewers.ITableLabelProvider;
 import org.eclipse.swt.graphics.Image;
 
+import com.salesforce.dataloader.client.DescribeRefObject;
+import com.salesforce.dataloader.controller.Controller;
+import com.salesforce.dataloader.dyna.ParentIdLookupFieldFormatter;
 import com.salesforce.dataloader.ui.MappingDialog;
 import com.sforce.soap.partner.Field;
+
 
 /**
  * This class provides the labels for PlayerTable
@@ -40,8 +44,7 @@ public class SforceLabelProvider implements ITableLabelProvider {
 
 
     // Constructs a PlayerLabelProvider
-    public SforceLabelProvider() {
-
+    public SforceLabelProvider(Controller controller) {
     }
 
 
@@ -62,16 +65,48 @@ public class SforceLabelProvider implements ITableLabelProvider {
     @Override
     public String getColumnText(Object arg0, int arg1) {
         Field field = (Field) arg0;
+        boolean isReferenceField = false;
+        String[] referenceTos = field.getReferenceTo();
+        if (referenceTos != null && referenceTos.length > 0) {
+            isReferenceField = true;
+        }
         String text = "";
         switch (arg1) {
         case MappingDialog.FIELD_NAME:
             text = field.getName();
+            if (isReferenceField && !text.contains(ParentIdLookupFieldFormatter.NEW_FORMAT_PARENT_IDLOOKUP_FIELD_SEPARATOR_CHAR)) {
+                text = field.getRelationshipName() + ParentIdLookupFieldFormatter.NEW_FORMAT_PARENT_IDLOOKUP_FIELD_SEPARATOR_CHAR + "Id";
+            }
             break;
         case MappingDialog.FIELD_LABEL:
             text = field.getLabel();
             break;
         case MappingDialog.FIELD_TYPE:
             text = field.getType().toString();
+            if ("string".equalsIgnoreCase(text) || "textarea".equalsIgnoreCase(text)) {
+                text = text
+                        + "("
+                        + field.getLength()
+                        +")";
+            }
+            if ("reference".equalsIgnoreCase(text)) {
+                text = "Lookup";
+                if (isReferenceField) {
+                    if (referenceTos.length >= DescribeRefObject.MAX_PARENT_OBJECTS_IN_REFERENCING_FIELD) {
+                        text = text + " (" + referenceTos.length + " objects)";
+                    } else {
+                        for (int i = 0; i < referenceTos.length; i++) {
+                            String refEntityName = referenceTos[i];
+                            if (i == 0) {
+                                text = text + " (" + refEntityName;
+                            } else {
+                                text = text + ", " + refEntityName;
+                            }
+                        }
+                        text = text +")";
+                    }
+                }
+            }
             break;
         }
         return text;

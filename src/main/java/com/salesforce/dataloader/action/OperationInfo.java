@@ -28,23 +28,12 @@ package com.salesforce.dataloader.action;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
-import org.eclipse.jface.dialogs.IDialogConstants;
 import org.eclipse.jface.resource.ImageDescriptor;
-import org.eclipse.jface.wizard.Wizard;
-import org.eclipse.swt.graphics.Image;
 
 import com.salesforce.dataloader.action.progress.ILoaderProgress;
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.controller.Controller;
-import com.salesforce.dataloader.ui.*;
-import com.salesforce.dataloader.ui.LoadWizard.DeleteWizard;
-import com.salesforce.dataloader.ui.LoadWizard.HardDeleteWizard;
-import com.salesforce.dataloader.ui.LoadWizard.InsertWizard;
-import com.salesforce.dataloader.ui.LoadWizard.UpdateWizard;
-import com.salesforce.dataloader.ui.LoadWizard.UpsertWizard;
-import com.salesforce.dataloader.ui.extraction.ExtractAllWizard;
-import com.salesforce.dataloader.ui.extraction.ExtractionWizard;
 import com.salesforce.dataloader.ui.uiActions.OperationUIAction;
 import com.sforce.async.OperationEnum;
 
@@ -55,34 +44,36 @@ import com.sforce.async.OperationEnum;
  */
 public enum OperationInfo {
 
-    insert(InsertAction.class, InsertWizard.class),
-    update(UpdateAction.class, UpdateWizard.class),
-    upsert(UpsertAction.class, UpsertWizard.class),
-    delete(DeleteAction.class, DeleteWizard.class),
-    hard_delete(null, BulkLoadAction.class, HardDeleteWizard.class),
-    extract(PartnerExtractAction.class, BulkExtractAction.class, ExtractionWizard.class),
-    extract_all(PartnerExtractAllAction.class, null, ExtractAllWizard.class);
+    insert(InsertAction.class, OperationInfoUIHelper.insert),
+    update(UpdateAction.class, OperationInfoUIHelper.update),
+    upsert(UpsertAction.class, OperationInfoUIHelper.upsert),
+    delete(DeleteAction.class, OperationInfoUIHelper.delete),
+    undelete(UndeleteAction.class, null, OperationInfoUIHelper.undelete),
+    hard_delete(null, BulkLoadAction.class, OperationInfoUIHelper.hard_delete),
+    extract(PartnerExtractAction.class, BulkExtractAction.class, OperationInfoUIHelper.extract),
+    extract_all(PartnerExtractAllAction.class, BulkExtractAction.class, OperationInfoUIHelper.extract_all);
 
     /** all operations, in order */
-    public static final OperationInfo[] ALL_OPERATIONS_IN_ORDER = { insert, update, upsert, delete, hard_delete,
-        extract, extract_all };
+    public static final OperationInfo[] ALL_OPERATIONS_IN_ORDER = 
+            { insert, update, upsert, delete, undelete, hard_delete, extract, extract_all };
 
     private static final Logger logger = LogManager.getLogger(OperationInfo.class);
 
     private final Class<? extends IAction> partnerAPIActionClass;
     private final Class<? extends IAction> bulkAPIActionClass;
-    private final Class<? extends Wizard> wizardClass;
+    private final OperationInfoUIHelper uiHelper;
 
     private OperationInfo(Class<? extends IAction> partnerAPIActionClass, Class<? extends IAction> bulkAPIActionClass,
-            Class<? extends Wizard> wizardClass) {
+            OperationInfoUIHelper uiHelper) {
 
         this.partnerAPIActionClass = partnerAPIActionClass;
         this.bulkAPIActionClass = bulkAPIActionClass;
-        this.wizardClass = wizardClass;
+        this.uiHelper = uiHelper;
     }
 
-    private OperationInfo(Class<? extends IAction> partnerAPIActionClass, Class<? extends Wizard> wizardClass) {
-        this(partnerAPIActionClass, BulkLoadAction.class, wizardClass);
+    private OperationInfo(Class<? extends IAction> partnerAPIActionClass,
+            OperationInfoUIHelper uiHelper) {
+        this(partnerAPIActionClass, BulkLoadAction.class, uiHelper);
     }
 
     public boolean bulkAPIEnabled() {
@@ -112,49 +103,45 @@ public enum OperationInfo {
     }
 
     public String getIconName() {
-        if (this == hard_delete) return delete.getIconName();
-        if (this == upsert) return update.getIconName();
-        if (this == extract_all) return extract.getIconName();
-        return name() + "_icon";
+        return this.uiHelper.getIconName();
     }
 
     public String getIconLocation() {
-        if (this == hard_delete) return delete.getIconLocation();
-        if (this == extract_all) return extract.getIconLocation();
-        return "img/icons/icon_" + name() + ".gif";
+        return this.uiHelper.getIconLocation();
     }
 
     public String getMenuLabel() {
-        return Labels.getString(name() + ".UIAction.menuText");
+        return this.uiHelper.getMenuLabel();
     }
 
     public String getToolTipText() {
-        return Labels.getString(name() + ".UIAction.tooltipText");
+        return this.uiHelper.getToolTipText();
     }
 
     public String getLabel() {
-        return Labels.getString("UI." + name());
-    }
-
-    public Wizard instantiateWizard(Controller ctl) {
-        logger.info(Messages.getMessage(getClass(), "creatingWizard", this));
-        try {
-            return ((Class<? extends Wizard>)this.wizardClass).getConstructor(Controller.class).newInstance(ctl);
-        } catch (Exception e) {
-            throw unsupportedInstantiation(e, this.wizardClass);
-        }
+        return this.uiHelper.getLabel();
     }
 
     public OperationUIAction createUIAction(Controller ctl) {
         return new OperationUIAction(ctl, this);
     }
 
-    public OperationEnum getOperationEnum() {
+    public OperationEnum getBulkOperationEnum() {
         switch (this) {
+        case insert:
+            return OperationEnum.insert;
+        case update:
+            return OperationEnum.update;
+        case upsert:
+            return OperationEnum.upsert;
+        case delete:
+            return OperationEnum.delete;
         case hard_delete:
             return OperationEnum.hardDelete;
         case extract:
             return OperationEnum.query;
+        case extract_all:
+            return OperationEnum.queryAll;
         default:
             return OperationEnum.valueOf(name());
         }
@@ -163,9 +150,13 @@ public enum OperationInfo {
     public boolean isDelete() {
         return this == delete || this == hard_delete;
     }
-
+    
+    public boolean isUndelete() {
+        return this == undelete;
+    }
+    
     public int getDialogIdx() {
-        return IDialogConstants.CLIENT_ID + ordinal() + 1;
+        return this.uiHelper.getDialogIdx();
     }
 
     public boolean isOperationAllowed(Config cfg) {
@@ -173,27 +164,20 @@ public enum OperationInfo {
         return this != hard_delete || cfg.isBulkAPIEnabled();
     }
 
-    public Image getIconImage() {
-        Image result = UIUtils.getImageRegistry().get(getIconName());
-        if (result == null) { throw new NullPointerException(name() + ": cannot find image: " + getIconName() + ", "
-                + getIconLocation()); }
-        return result;
-    }
-
     public ImageDescriptor getIconImageDescriptor() {
-        ImageDescriptor result = UIUtils.getImageRegistry().getDescriptor(getIconName());
-        if (result == null) { throw new NullPointerException(name() + ": cannot find image descriptor: "
-                + getIconName() + ", " + getIconLocation()); }
-        return result;
+        return this.uiHelper.getIconImageDescriptor();
     }
 
     public String getInfoMessageForDataSelectionPage() {
-        if (this == hard_delete) return Labels.getString("DataSelectionPage." + name());
-        return null;
+        return this.uiHelper.getInfoMessageForDataSelectionPage();
     }
 
     public boolean isExtraction() {
         return this == extract || this == extract_all;
+    }
+    
+    public OperationInfoUIHelper getUIHelper() {
+        return this.uiHelper;
     }
 
 }

@@ -36,8 +36,6 @@ import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.Set;
 import java.util.StringTokenizer;
-import java.util.TreeMap;
-import java.util.TreeSet;
 
 import com.sforce.soap.partner.Field;
 import org.apache.logging.log4j.Logger;
@@ -47,6 +45,7 @@ import com.salesforce.dataloader.client.PartnerClient;
 import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.exception.MappingInitializationException;
 import com.salesforce.dataloader.model.Row;
+import com.salesforce.dataloader.util.AppUtil;
 
 /**
  * Base class for field name mappers. Used by data loader operations to map between local field names and sfdc field
@@ -60,6 +59,11 @@ public abstract class Mapper {
     private static final Logger logger = LogManager.getLogger(Mapper.class);
 
     public static class InvalidMappingException extends RuntimeException {
+        /**
+         * 
+         */
+        private static final long serialVersionUID = 1L;
+
         public InvalidMappingException(String msg, Throwable e) {
             super(msg, e);
         }
@@ -70,33 +74,55 @@ public abstract class Mapper {
     }
 
     private final CaseInsensitiveSet daoColumns;
-    private final Map<String, String> constants = caseInsensitiveMap();
+    private final CaseInsensitiveMap constants = new CaseInsensitiveMap();
 
-    private final Map<String, String> map = caseInsensitiveMap();
+    protected final CaseInsensitiveMap map = new CaseInsensitiveMap();
     private final PartnerClient client;
     private final CaseInsensitiveSet fields;
-
-    private <V> Map<String, V> caseInsensitiveMap() {
-        return new TreeMap<String, V>(String.CASE_INSENSITIVE_ORDER);
-    }
+    protected final String mappingFileName;
 
     protected Mapper(PartnerClient client, Collection<String> columnNames, Field[] fields, String mappingFileName)
             throws MappingInitializationException {
         this.client = client;
         this.fields = new CaseInsensitiveSet();
-        Set<String> daoColumns = new TreeSet<String>(String.CASE_INSENSITIVE_ORDER);
-        if (columnNames != null) daoColumns.addAll(columnNames);
-        this.daoColumns = new CaseInsensitiveSet(Collections.unmodifiableSet(daoColumns));
-        putPropertyFileMappings(mappingFileName);
+        CaseInsensitiveSet daoColumns = new CaseInsensitiveSet();
+        if (columnNames != null) {
+            int i = 0;
+            for (String colName : columnNames) {
+                i++;
+                if (colName == null) {
+                    String errorMsg = "Missing column name in the CSV file at column " + i;
+                    logger.error(errorMsg);
+                    throw new MappingInitializationException(errorMsg);
+                }
+                daoColumns.add(colName);
+            }
+        }
+        this.daoColumns = daoColumns;
         if (fields != null) {
             for (Field field : fields) {
                 this.fields.add(field.getName());
             }
         }
+        this.mappingFileName = mappingFileName;
+        putPropertyFileMappings(mappingFileName);
     }
 
     public final void putMapping(String src, String dest) {
-        this.map.put(daoColumns.getOriginal(src), fields.getOriginal(dest));
+        // destination can be multiple field names for upload operations
+        StringTokenizer st = new StringTokenizer(dest, AppUtil.COMMA);
+        String originalDestList = null;
+        while(st.hasMoreElements()) {
+            String v = st.nextToken();
+            v = v.trim();
+            String originalVal = fields.getOriginal(v);
+            if (originalDestList == null) {
+                originalDestList = originalVal;
+            } else {
+                originalDestList = originalDestList + ", " + originalVal;
+            }
+        }
+        this.map.put(daoColumns.getOriginal(src), originalDestList);
     }
 
     protected void putConstant(String name, String value) {
@@ -104,7 +130,7 @@ public abstract class Mapper {
     }
 
     private void handleMultipleValuesFromConstant(String name, String value) {
-        StringTokenizer st = new StringTokenizer(name, ",");
+        StringTokenizer st = new StringTokenizer(name, AppUtil.COMMA);
         while(st.hasMoreElements()) {
             String v = st.nextToken();
             v = v.trim();
@@ -117,7 +143,7 @@ public abstract class Mapper {
     }
 
     protected void mapConstants(Row rowMap) {
-        rowMap.putAll(this.constants);
+        rowMap.putAll(constants);
     }
 
     private Properties loadProperties(String fileName) throws MappingInitializationException {
@@ -209,7 +235,7 @@ public abstract class Mapper {
     }
 
     public boolean hasDaoColumn(String localName) {
-        return this.daoColumns.contains(localName);
+        return this.daoColumns.containsKey(localName);
     }
 
     public void removeMapping(String srcName) {

@@ -47,6 +47,7 @@ import com.salesforce.dataloader.dao.csv.CSVFileReader;
 import com.salesforce.dataloader.dao.csv.CSVFileWriter;
 import com.salesforce.dataloader.model.NATextValue;
 import com.salesforce.dataloader.model.Row;
+import com.salesforce.dataloader.util.AppUtil;
 import com.sforce.soap.partner.QueryResult;
 import com.sforce.soap.partner.SaveResult;
 import com.sforce.soap.partner.sobject.SObject;
@@ -87,7 +88,8 @@ public class NAProcessTest extends ProcessTestBase {
     public static Collection<Object[]> getConfigGeneratorParams() {
         return Arrays.asList(
                 TestVariant.forSettings(TestSetting.BULK_API_ENABLED),
-                TestVariant.forSettings(TestSetting.BULK_API_DISABLED));
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_CACHE_DAO_UPLOAD_ENABLED),
+               TestVariant.forSettings(TestSetting.BULK_API_DISABLED));
     }
 
     @Test
@@ -201,7 +203,7 @@ public class NAProcessTest extends ProcessTestBase {
         task.setField("OwnerId", userId);
         task.setField("Subject", TASK_SUBJECT);
         task.setField(fieldToNullName, fieldToNullValue);
-        SaveResult[] result = getController().getPartnerClient().getClient().create(new SObject[] { task });
+        SaveResult[] result = getController().getPartnerClient().getConnection().create(new SObject[] { task });
         assertEquals(1, result.length);
         if (!result[0].getSuccess())
             Assert.fail("creation of task failed with error " + result[0].getErrors()[0].getMessage());
@@ -209,7 +211,7 @@ public class NAProcessTest extends ProcessTestBase {
     }
 
     private String getCsvFieldValue(String csvFile, String fieldName) throws Exception {
-        CSVFileReader reader = new CSVFileReader(csvFile, getController(), false);
+        CSVFileReader reader = new CSVFileReader(new File(csvFile), getController().getConfig(), true, false);
         reader.open();
         assertEquals(1, reader.getTotalRows());
         String fieldValue = (String)reader.readRow().get(fieldName);
@@ -255,7 +257,7 @@ public class NAProcessTest extends ProcessTestBase {
 
         CSVFileWriter writer = null;
         try {
-            writer = new CSVFileWriter(CSV_FILE_PATH, getController().getConfig());
+            writer = new CSVFileWriter(CSV_FILE_PATH, getController().getConfig(), AppUtil.COMMA);
             writer.open();
             writer.setColumnNames(new ArrayList<String>(row.keySet()));
             writer.writeRow(row);
@@ -263,10 +265,4 @@ public class NAProcessTest extends ProcessTestBase {
             if (writer != null) writer.close();
         }
     }
-
-    @Override
-    public void cleanRecords() {
-        deleteSfdcRecords("Task", "Subject='" + TASK_SUBJECT + "'", 0);
-    }
-
 }

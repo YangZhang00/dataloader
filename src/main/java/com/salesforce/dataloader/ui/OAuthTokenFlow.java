@@ -28,16 +28,14 @@ package com.salesforce.dataloader.ui;
 
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.model.OAuthToken;
-import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.browser.ProgressEvent;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
@@ -64,7 +62,7 @@ public class OAuthTokenFlow extends OAuthFlow {
         return config.getString(Config.OAUTH_SERVER) +
                 "/services/oauth2/authorize?response_type=token&display=popup&client_id=" +
                 config.getString(Config.OAUTH_CLIENTID) + "&redirect_uri=" +
-                URLEncoder.encode(config.getString(Config.OAUTH_REDIRECTURI), "UTF-8");
+                URLEncoder.encode(config.getString(Config.OAUTH_REDIRECTURI), StandardCharsets.UTF_8.name());
     }
 
     public static class OAuthTokenBrowserLister extends OAuthBrowserListener {
@@ -79,6 +77,7 @@ public class OAuthTokenFlow extends OAuthFlow {
 
         @Override
         public void completed(ProgressEvent progressEvent) {
+            super.completed(progressEvent);
             try {
                 boolean handled = handleCompletedUrl(browser.getUrl(), config);
                 if (handled) {

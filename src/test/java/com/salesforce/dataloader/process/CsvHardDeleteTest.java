@@ -34,6 +34,7 @@ import com.salesforce.dataloader.exception.DataAccessObjectException;
 import com.salesforce.dataloader.exception.DataAccessObjectInitializationException;
 import com.salesforce.dataloader.model.Row;
 import org.junit.Assert;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -54,6 +55,7 @@ import static org.junit.Assert.assertTrue;
  * @userstory Commenting existing data loader tests and uploading into QA force
  */
 @RunWith(Parameterized.class)
+@SuppressWarnings("unused")
 public class CsvHardDeleteTest extends ProcessTestBase {
 
     public CsvHardDeleteTest(Map<String, String> config) {
@@ -64,8 +66,11 @@ public class CsvHardDeleteTest extends ProcessTestBase {
     public static Collection<Object[]> getTestParameters() {
         return Arrays.asList(
                 TestVariant.forSettings(TestSetting.BULK_API_ENABLED),
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_CACHE_DAO_UPLOAD_ENABLED),
                 TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_ZIP_CONTENT_ENABLED),
-                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_SERIAL_MODE_ENABLED));
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_SERIAL_MODE_ENABLED),
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_V2_API_ENABLED)
+            );
     }
 
     /**
@@ -153,7 +158,7 @@ public class CsvHardDeleteTest extends ProcessTestBase {
             Assert.fail("hard delete should not succeed if bulk api is turned off");
         } catch (Exception e) {
             final String msg = e.getMessage();
-            final String expected = "java.lang.UnsupportedOperationException: Error instantiating operation hard_delete: could not instantiate class: null.";
+            final String expected = "Error instantiating operation hard_delete: could not instantiate class: null.";
             assertEquals("Wrong exception thrown when attempting to do hard delete with bulk api off : ", expected, msg);
         }
 

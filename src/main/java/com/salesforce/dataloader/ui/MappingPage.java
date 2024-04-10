@@ -30,9 +30,6 @@ import java.util.*;
 import java.util.Map.Entry;
 import java.util.List;
 
-import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.LogManager;
-
 import org.eclipse.jface.viewers.TableViewer;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.SelectionAdapter;
@@ -41,9 +38,7 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 
-import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.controller.Controller;
-import com.salesforce.dataloader.dyna.ObjectField;
 import com.salesforce.dataloader.exception.MappingInitializationException;
 import com.salesforce.dataloader.mapping.LoadMapper;
 import com.salesforce.dataloader.ui.mapping.MappingContentProvider;
@@ -59,18 +54,12 @@ import com.sforce.soap.partner.FieldType;
  */
 public class MappingPage extends LoadPage {
 
-    private final Controller controller;
     private TableViewer mappingTblViewer;
-    private final Logger logger = LogManager.getLogger(MappingPage.class);
     private Map<String, Field> relatedFields;
+    private Label mappingLabel;
 
     public MappingPage(Controller controller) {
-        super(Labels.getString("MappingPage.title"), Labels.getString("MappingPage.titleMsg"), UIUtils.getImageRegistry().getDescriptor("splashscreens")); //$NON-NLS-1$ //$NON-NLS-2$
-
-        // Set the description
-        setDescription(Labels.getString("MappingPage.description")); //$NON-NLS-1$
-        this.controller = controller;
-
+        super("MappingPage", controller); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Override
@@ -90,15 +79,12 @@ public class MappingPage extends LoadPage {
             public void widgetSelected(SelectionEvent event) {
                 FileDialog dlg = new FileDialog(getShell(), SWT.OPEN);
                 String filename = dlg.open();
-                if (filename != null && !"".equals(filename)) { //$NON-NLS-1$
-                    Config config = controller.getConfig();
-                    config.setValue(Config.MAPPING_FILE, filename);
+                if (filename != null && !filename.isBlank()) { //$NON-NLS-1$
                     LoadMapper mapper = (LoadMapper)controller.getMapper();
                     mapper.clearMap();
                     try {
                         mapper.putPropertyFileMappings(filename);
                         updateMapping();
-                        packMappingColumns();
                     } catch (MappingInitializationException e) {
                         logger.error(Labels.getString("MappingPage.errorLoading"), e); //$NON-NLS-1$
                         UIUtils.errorMessageBox(getShell(), e);
@@ -126,16 +112,15 @@ public class MappingPage extends LoadPage {
         data.heightHint = 15;
         blankLabel2.setLayoutData(data);
 
+
         Label sep3 = new Label(comp, SWT.HORIZONTAL | SWT.SEPARATOR);
         data = new GridData(GridData.FILL_HORIZONTAL);
         data.horizontalSpan = 2;
         sep3.setLayoutData(data);
 
-        Label mappingLabel = new Label(comp, SWT.NONE);
-        mappingLabel.setText(Labels.getString("MappingPage.currentBelow")); //$NON-NLS-1$
-        data = new GridData();
+        mappingLabel = new Label(comp, SWT.NONE);
+        data = new GridData(GridData.FILL_HORIZONTAL);
         data.horizontalSpan = 2;
-        data.heightHint = 20;
         mappingLabel.setLayoutData(data);
 
         //  mapping field table viewer
@@ -145,22 +130,19 @@ public class MappingPage extends LoadPage {
 
         //  Set up the mapping table
         Table mappingTable = mappingTblViewer.getTable();
-        data = new GridData(GridData.FILL_HORIZONTAL);
-        data.heightHint = 200;
+        data = new GridData(GridData.FILL_BOTH);
         data.horizontalSpan = 2;
         mappingTable.setLayoutData(data);
 
         // Add the first column - name
-        TableColumn tc = new TableColumn(mappingTable, SWT.LEFT);
-        tc.setText(Labels.getString("MappingPage.fileColumn")); //$NON-NLS-1$
-
-        //Add the second column - label
-        tc = new TableColumn(mappingTable, SWT.LEFT);
-        tc.setText(Labels.getString("MappingPage.name")); //$NON-NLS-1$
+        TableColumn csvFieldColumn = new TableColumn(mappingTable, SWT.LEFT);
+        csvFieldColumn.setText(Labels.getString("MappingPage.fileColumn")); //$NON-NLS-1$
+       //Add the second column - label
+        TableColumn sobjectFieldColumn = new TableColumn(mappingTable, SWT.LEFT);
+        sobjectFieldColumn.setText(Labels.getString("MappingPage.fieldName")); //$NON-NLS-1$
 
         //update the model
         updateMapping();
-
         packMappingColumns();
 
         // Turn on the header and the lines
@@ -168,6 +150,7 @@ public class MappingPage extends LoadPage {
         mappingTable.setLinesVisible(true);
 
         setControl(comp);
+        setupPage();
     }
 
     public void packMappingColumns() {
@@ -178,6 +161,7 @@ public class MappingPage extends LoadPage {
                 mappingTable.getColumn(i).pack();
             }
         }
+        refreshMapping();
     }
 
     /**
@@ -194,12 +178,14 @@ public class MappingPage extends LoadPage {
                 table.showItem(table.getItem(0));
             }
         }
+        packMappingColumns();
     }
 
-    public void refreshMapping() {
+    private void refreshMapping() {
         if (mappingTblViewer != null) {
             mappingTblViewer.refresh();
         }
+        UIUtils.setTableColWidth(this.mappingTblViewer.getTable());
     }
 
     public Field[] getFieldTypes() {
@@ -237,16 +223,8 @@ public class MappingPage extends LoadPage {
     private Field[] addRelatedFields(Field[] fields) {
         List<Field> relatedFieldList = new LinkedList<Field>();
         for(Entry<String,Field> relatedFieldInfo : relatedFields.entrySet()) {
-            String relationshipName = relatedFieldInfo.getKey();
-            Field relatedField = relatedFieldInfo.getValue();
-            String mapFieldName = ObjectField.formatAsString(relationshipName, relatedField.getName());
-            Field mapField = new Field();
-            mapField.setName(mapFieldName);
-            mapField.setLabel(relationshipName + " " + relatedField.getLabel());
-            mapField.setType(FieldType.reference);
-            mapField.setCreateable(relatedField.isCreateable());
-            mapField.setUpdateable(relatedField.isUpdateable());
-            relatedFieldList.add(mapField);
+            Field lookupField = relatedFieldInfo.getValue();
+            relatedFieldList.add(lookupField);
         }
         relatedFieldList.addAll(Arrays.asList(fields));
         return relatedFieldList.toArray(fields);
@@ -257,18 +235,17 @@ public class MappingPage extends LoadPage {
      * @see com.salesforce.dataloader.ui.LoadPage#setupPage()
      */
     @Override
-    boolean setupPage() {
-        try {
-            // clear mapping file
-            controller.getConfig().setValue(Config.MAPPING_FILE, "");
-            controller.createMapper();
-            updateMapping();
-            packMappingColumns();
-            return true;
-        } catch (MappingInitializationException e) {
-            UIUtils.errorMessageBox(getShell(), e);
-            logger.error("Could not initialize mapping page", e);
-            return false;
+    public boolean setupPagePostLogin() {
+        if (controller.getMapper() == null) {
+            return true; // further processing is not possible
         }
+        updateMapping();
+        return true;
+    }
+
+    @Override
+    public void setPageComplete() {
+        // no validations performed currently
+        setPageComplete(true);
     }
 }

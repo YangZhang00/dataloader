@@ -25,13 +25,17 @@
  */
 package com.salesforce.dataloader.ui;
 
+
 import com.salesforce.dataloader.config.Config;
+
 import org.apache.http.client.utils.URIBuilder;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Dialog;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
@@ -68,12 +72,19 @@ public abstract class OAuthFlow extends Dialog {
     public boolean open() throws UnsupportedEncodingException {
         // Create the dialog window
         Display display = getParent().getDisplay();
-        Shell shell = new Shell(getParent(), SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.FILL);
-        Grid12 grid = new Grid12(shell, 30, 600);
+        Shell shell = new Shell(getParent(), SWT.RESIZE | SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.FILL);
+        GridLayout layout = new GridLayout(1, false);
+        shell.setLayout(layout);
 
         // Create the web browser
         Browser browser = new Browser(shell, SWT.NONE);
-        browser.setLayoutData(grid.createCell(12));
+        GridData data = new GridData();
+        data.horizontalAlignment = SWT.FILL;
+        data.grabExcessHorizontalSpace = true;
+        data.grabExcessVerticalSpace = true;
+        data.widthHint = 400;
+        data.heightHint = 600;
+        browser.setLayoutData(data);
 
         OAuthBrowserListener listener = getOAuthBrowserListener(shell, browser, config);
         browser.addProgressListener(listener);
@@ -105,5 +116,4 @@ public abstract class OAuthFlow extends Dialog {
         new URIBuilder(url).getQueryParams().stream().forEach(kvp -> params.put(kvp.getName(), kvp.getValue()));
         return params;
     }
-
 }

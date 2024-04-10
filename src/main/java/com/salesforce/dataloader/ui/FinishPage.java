@@ -27,7 +27,10 @@
 package com.salesforce.dataloader.ui;
 
 import org.eclipse.jface.preference.DirectoryFieldEditor;
+import org.eclipse.jface.wizard.IWizardContainer;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.events.ModifyEvent;
+import org.eclipse.swt.events.ModifyListener;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
@@ -36,6 +39,7 @@ import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.exception.MappingInitializationException;
 import com.salesforce.dataloader.mapping.LoadMapper;
+import com.salesforce.dataloader.mapping.Mapper;
 
 /**
  * Describe your class here.
@@ -45,20 +49,17 @@ import com.salesforce.dataloader.mapping.LoadMapper;
  */
 public class FinishPage extends LoadPage {
 
-    private final Controller controller;
     private DirectoryFieldEditor dirFE;
+    private ContentLimitLink contentNoteLimitLink;
 
     public FinishPage(Controller controller) {
-        super(Labels.getString("FinishPage.title"), Labels.getString("FinishPage.finishMsg"), UIUtils.getImageRegistry().getDescriptor("splashscreens")); //$NON-NLS-1$ //$NON-NLS-2$
-
-        this.controller = controller;
-        setPageComplete(false);
-
-        // Set the description
-        setDescription(Labels.getString("FinishPage.selectDir")); //$NON-NLS-1$
-
+        this("FinishPage", controller); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    public FinishPage(String name, Controller controller) {
+        super(name, controller); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+    
     @Override
     public void createControl(Composite parent) {
         Composite comp = new Composite(parent, SWT.NONE);
@@ -73,16 +74,27 @@ public class FinishPage extends LoadPage {
         label.setText(Labels.getString("FinishPage.overwritten")); //$NON-NLS-1$
 
         Composite dirComp = new Composite(comp, SWT.NONE);
-        GridData data = new GridData();
-        data.widthHint = 400;
+        GridData data = new GridData(GridData.FILL_HORIZONTAL);
         dirComp.setLayoutData(data);
 
         dirFE = new DirectoryFieldEditor(Labels.getString("FinishPage.output"), Labels.getString("FinishPage.chooseDir"), dirComp); //$NON-NLS-1$ //$NON-NLS-2$
         dirFE.setStringValue(controller.getConfig().getString(Config.OUTPUT_STATUS_DIR));
 
-        hook_createControl(comp);
+        Text textField = dirFE.getTextControl(dirComp);
+        textField.addModifyListener(new ModifyListener() {
 
+            @Override
+            public void modifyText(ModifyEvent arg0) {
+                setPageComplete();
+            }
+            
+        });
+
+        contentNoteLimitLink = new ContentLimitLink(comp, SWT.WRAP, getController());
+        
+        hook_createControl(comp);
         setControl(comp);
+        setupPage();
     }
 
     protected void hook_createControl(Composite comp) {}
@@ -101,9 +113,12 @@ public class FinishPage extends LoadPage {
      * @see com.salesforce.dataloader.ui.LoadPage#setupPage()
      */
     @Override
-    boolean setupPage() {
+    protected boolean setupPagePostLogin() {
         try {
             verifySettings();
+            if (!controller.getConfig().getBoolean(Config.WIZARD_POPULATE_RESULTS_FOLDER_WITH_PREVIOUS_OP_RESULTS_FOLDER)) {
+                dirFE.setStringValue(null); // clear previous selection
+            }
         } catch (final MappingInitializationException e) {
             final FinishPage page = this;
             Display.getDefault().syncExec(new Thread() {
@@ -114,14 +129,24 @@ public class FinishPage extends LoadPage {
             });
             return false;
         }
+
+        setPageComplete();
+        IWizardContainer wizardContainer = this.getContainer();
+        if (wizardContainer != null) {
+            wizardContainer.updateButtons();
+        }
+        contentNoteLimitLink.setVisible();
         if (!controller.saveConfig()) return false;
-        setPageComplete(true);
         return true;
     }
 
     private void verifySettings() throws MappingInitializationException {
-        if (!getController().getConfig().getOperationInfo().isExtraction())
-            ((LoadMapper)getController().getMapper()).verifyMappingsAreValid();
+        if (!getController().getConfig().getOperationInfo().isExtraction()) {
+            Mapper mapper = (LoadMapper)getController().getMapper();
+            if (mapper != null) {
+                ((LoadMapper)getController().getMapper()).verifyMappingsAreValid();
+            }
+        }
     }
 
     public boolean finishAllowed() {
@@ -132,4 +157,12 @@ public class FinishPage extends LoadPage {
         return this.controller;
     }
 
+    public void setPageComplete() {
+        String outputDir = getOutputDir();
+        if (outputDir == null || outputDir.isBlank() || !this.isCurrentPage()) {
+            setPageComplete(false);
+        } else {
+            setPageComplete(true);
+        }
+    }
 }

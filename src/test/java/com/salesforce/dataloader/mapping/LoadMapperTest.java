@@ -30,6 +30,7 @@ import com.salesforce.dataloader.exception.MappingInitializationException;
 import com.salesforce.dataloader.model.Row;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.io.File;
@@ -49,6 +50,7 @@ import static org.junit.Assert.assertTrue;
  * @author Federico Recio
  * @since 8.0
  */
+@SuppressWarnings("unused")
 public class LoadMapperTest extends ConfigTestBase {
 
     private static final String[] SOURCE_NAMES = { "sourceOne", "sourceTwo", "sourceThree" };

@@ -29,12 +29,15 @@ package com.salesforce.dataloader.mapping;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.salesforce.dataloader.util.AppUtil;
+
 /**
  * Class to parse information used by DataLoader from a soql expression
  * 
  * @author Colin Jarvis
  * @since 21.0
  */
+@SuppressWarnings("serial")
 class SOQLInfo {
 
     static class SOQLParserException extends Exception {
@@ -52,7 +55,7 @@ class SOQLInfo {
             fieldString = getTrimmed(fieldString);
             int lparenIdx = fieldString.indexOf('(');
             // no nested queries!
-            if (lparenIdx == 0) throw invalidSoql("Nested queries are not supported");
+            if (lparenIdx == 0) throw invalidSoql("Nested queries are not supported in SOQL SELECT clause");
             if (lparenIdx < 0) {
                 // normal field
                 this.fieldName = fieldString;
@@ -135,7 +138,7 @@ class SOQLInfo {
 
         String rawFields = soql.substring(SELECT_KEYWORD.length(), fromIdx).trim();
         AtomicInteger aggIdx = new AtomicInteger();
-        for (String fieldString : rawFields.split(",")) {
+        for (String fieldString : rawFields.split(AppUtil.COMMA)) {
             SOQLFieldInfo soqlFieldInfo = new SOQLFieldInfo(fieldString, aggIdx);
             this.selectedFields.add(soqlFieldInfo);
         }

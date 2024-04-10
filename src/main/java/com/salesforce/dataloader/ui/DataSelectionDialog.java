@@ -30,31 +30,30 @@ import java.io.File;
 import java.util.List;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.BusyIndicator;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.swt.widgets.*;
+import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Shell;
 
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.controller.Controller;
+import com.salesforce.dataloader.dao.DataAccessObjectFactory;
 import com.salesforce.dataloader.dao.DataReader;
 import com.salesforce.dataloader.exception.DataAccessObjectException;
-import com.salesforce.dataloader.exception.DataAccessObjectInitializationException;
+import com.salesforce.dataloader.exception.MappingInitializationException;
 import com.salesforce.dataloader.util.DAORowUtil;
-import com.sforce.ws.ConnectionException;
-import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.LogManager;
 
-public class DataSelectionDialog extends Dialog {
-    private final Logger logger = LogManager.getLogger(MappingPage.class);
-    private String message;
-    private boolean success;
-    private Controller controller;
+public class DataSelectionDialog extends BaseDialog {
     private Button ok;
     private Label label;
+    private ContentLimitLink contentNoteLimitLink;
+    private String delimiterList = "";
+    private String daoNameStr;
+    private String sObjectName;
 
     /**
      * InputDialog constructor
@@ -62,157 +61,123 @@ public class DataSelectionDialog extends Dialog {
      * @param parent
      *            the parent
      */
-    public DataSelectionDialog(Shell parent, Controller controller) {
-        this(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
-        this.controller = controller;
+    public DataSelectionDialog(Shell parent, Controller controller, String daoNameStr, String sObjectName) {
+        super(parent, controller);
+        this.daoNameStr = daoNameStr;
+        this.sObjectName = sObjectName;
+        if (controller.getConfig().getBoolean(Config.CSV_DELIMITER_COMMA)) {
+            this.delimiterList = " ','";
+        }
+        if (controller.getConfig().getBoolean(Config.CSV_DELIMITER_TAB)) {
+            this.delimiterList += " '<tab>'";
+        }
+        if (controller.getConfig().getBoolean(Config.CSV_DELIMITER_OTHER)) {
+            String otherDelimiters = controller.getConfig().getString(Config.CSV_DELIMITER_OTHER_VALUE);
+            for (char c : otherDelimiters.toCharArray()) {
+                this.delimiterList += " '" + c + "'";
+            }
+        }
     }
-
-    /**
-     * InputDialog constructor
-     *
-     * @param parent
-     *            the parent
-     * @param style
-     *            the style
-     */
-    public DataSelectionDialog(Shell parent, int style) {
-        // Let users override the default styles
-        super(parent, style);
-        setText(Labels.getString("DataSelectionDialog.title")); //$NON-NLS-1$
-        setMessage(Labels.getString("DataSelectionDialog.message")); //$NON-NLS-1$
-    }
-
-    /**
-     * Gets the message
-     *
-     * @return String
-     */
-    public String getMessage() {
-        return message;
-    }
-
-    /**
-     * Sets the message
-     *
-     * @param message
-     *            the new message
-     */
-    public void setMessage(String message) {
-        this.message = message;
-    }
-
-    /**
-     * Opens the dialog and returns the input
-     *
-     * @return String
-     */
-    public boolean open() {
-        // Create the dialog window
-        final Shell shell = new Shell(getParent(), getStyle());
-        shell.setText(getText());
-        shell.setImage(UIUtils.getImageRegistry().get("sfdc_icon")); //$NON-NLS-1$
-        createContents(shell);
+    
+    private void handleCSVReadError(Shell shell, String errorText) {
+        success = false;
+        ok.setEnabled(true);
+        Point size = label.computeSize(SWT.DEFAULT, SWT.DEFAULT);
+        label.setSize(shell.getClientArea().width, size.y);
+        label.setText(errorText); //$NON-NLS-1$ 
+        logger.error(errorText);
+        
+        shell.setText(Labels.getString("DataSelectionDialog.titleError"));
         shell.pack();
-        shell.open();
-        Display display = getParent().getDisplay();
-        BusyIndicator.showWhile(display, new Thread() {
-            @Override
-            public void run() {
-                try {
-                    controller.setFieldTypes();
-                    controller.setReferenceDescribes();
+        shell.redraw();
+    }
+    
+    // called from BaseDialog.open()
+    protected void processingWithBusyIndicator(Shell shell) {
+        try {
+            getController().initializeOperation(
+                    DataAccessObjectFactory.CSV_READ_TYPE,
+                    daoNameStr,
+                    sObjectName);
+        } catch (MappingInitializationException e) {
+            handleCSVReadError(shell, 
+                    Labels.getString("DataSelectionDialog.errorRead")
+                    + Labels.getFormattedString("DataSelectionDialog.errorReadExceptionDetails", 
+                            e.getMessage())
+                );
+            return;
+        }
 
-                    String daoPath = controller.getConfig().getString(Config.DAO_NAME);
-                    File file = new File(daoPath);
+        String daoPath = getController().getConfig().getString(Config.DAO_NAME);
+        File file = new File(daoPath);
 
-                    if (!file.exists() || !file.canRead()) {
-                        success = false;
-                        ok.setEnabled(true);
-                        label.setText(Labels.getString("DataSelectionDialog.errorRead")); //$NON-NLS-1$
-                        shell.setText(Labels.getString("DataSelectionDialog.titleError"));
-                        return;
-                    }
+        if (!file.exists() || !file.canRead()) {
+            handleCSVReadError(shell, 
+                    Labels.getString("DataSelectionDialog.errorRead")
+                    + Labels.getString("DataSelectionDialog.errorReadPermissionDetails")
+                );
+            return;
+        }
+        DataReader dataReader = (DataReader)getController().getDao();
 
-                    try {
-                        controller.createDao();
-                    } catch (DataAccessObjectInitializationException e) {
-                        success = false;
-                        ok.setEnabled(true);
-                        label.setText(Labels.getString("DataSelectionDialog.errorRead")); //$NON-NLS-1$
-                        shell.setText(Labels.getString("DataSelectionDialog.titleError"));
-                        return;
-                    }
-                    DataReader dataReader = (DataReader)controller.getDao();
+        List<String> header = null;
+        int totalRows = 0;
+        try {
+            dataReader.checkConnection();
+            dataReader.open();
 
-                    List header = null;
-                    int totalRows = 0;
-                    try {
-                        dataReader.checkConnection();
-                        dataReader.open();
-
-                        String error = DAORowUtil.validateColumns(dataReader);
-                        if(error != null && error.length() != 0) {
-                            int response = UIUtils.errorMessageBox(shell, error);
-                            // in case user doesn't want to continue, treat this as an error
-                            if(response != SWT.YES) {
-                                success = false;
-                                ok.setEnabled(true);
-                                label.setText(Labels.getString("DataSelectionDialog.errorCSVFormat")); //$NON-NLS-1$
-                                shell.setText(Labels.getString("DataSelectionDialog.titleError"));
-                                logger.error(Labels.getString("DataSelectionDialog.errorCSVFormat"));
-                                return;
-                            }
-                        }
-
-                        totalRows = dataReader.getTotalRows();
-
-                        if ((header = dataReader.getColumnNames())== null || header.size() == 0) {
-                            success = false;
-                            ok.setEnabled(true);
-                            label.setText(Labels.getString("DataSelectionDialog.errorCSVFormat")); //$NON-NLS-1$
-                            shell.setText(Labels.getString("DataSelectionDialog.titleError"));
-                            logger.error(Labels.getString("DataSelectionDialog.errorCSVFormat"));
-                            return;
-                        }
-
-                    } catch (DataAccessObjectException e) {
-                        success = false;
-                        ok.setEnabled(true);
-                        label.setText(Labels.getString("DataSelectionDialog.errorCSVFormat") + "  " + e.getMessage()); //$NON-NLS-1$
-                        logger.error(Labels.getString("DataSelectionDialog.errorCSVFormat"));
-                        Point size = label.computeSize(SWT.DEFAULT, SWT.DEFAULT);
-                        label.setSize(shell.getClientArea().width, size.y);
-                        shell.setText(Labels.getString("DataSelectionDialog.titleError"));
-                        shell.pack();
-                        shell.redraw();
-                        return;
-                    } finally {
-                        dataReader.close();
-                    }
-                    success = true;
-                    ok.setEnabled(true);
-                    label.setText(Labels.getFormattedString(
-                            "DataSelectionDialog.initSuccess", String.valueOf(totalRows))); //$NON-NLS-1$
-                    label.getParent().pack();
-
-                } catch (ConnectionException ex) {
-                    success = false;
-                    ok.setEnabled(true);
-                    label.setText(Labels.getString("DataSelectionDialog.errorEntity")); //$NON-NLS-1$
-                    shell.setText(Labels.getString("DataSelectionDialog.titleError"));
+            String error = DAORowUtil.validateColumns(dataReader);
+            if(error != null && error.length() != 0) {
+                int response = UIUtils.errorMessageBox(shell, error);
+                // in case user doesn't want to continue, treat this as an error
+                if(response != SWT.YES) {
+                    handleCSVReadError(shell, 
+                            Labels.getString("DataSelectionDialog.errorCSVFormat")
+                            + Labels.getFormattedString("DataSelectionDialog.errorCSVDetails",
+                                    delimiterList));
                     return;
                 }
             }
 
-        });
+            totalRows = dataReader.getTotalRows();
 
-        while (!shell.isDisposed()) {
-            if (!display.readAndDispatch()) {
-                display.sleep();
+            if ((header = dataReader.getColumnNames())== null || header.size() == 0) {
+                handleCSVReadError(shell, 
+                        Labels.getString("DataSelectionDialog.errorCSVFormat")
+                        + Labels.getFormattedString("DataSelectionDialog.errorCSVDetails",
+                                delimiterList));
+                return;
             }
+
+        } catch (DataAccessObjectException e) {
+            handleCSVReadError(shell, 
+                    Labels.getString("DataSelectionDialog.errorCSVFormat")
+                    + Labels.getFormattedString("DataSelectionDialog.errorCSVDetails",
+                            delimiterList));
+            return;
+        } finally {
+            dataReader.close();
         }
-        // Return the sucess
-        return success;
+        success = true;
+        ok.setEnabled(true);
+        String apiInfoStr = getController().getAPIInfo();
+        
+        // Set the description
+        label.setText(Labels.getFormattedString(
+                "DataSelectionDialog.initSuccess", String.valueOf(totalRows))
+                + "\n\n"
+                + Labels.getString("AdvancedSettingsDialog.batchSize")
+                + " "
+                + getController().getConfig().getString(String.valueOf(getController().getConfig().getLoadBatchSize()))
+                + "\n"
+                + Labels.getString("AdvancedSettingsDialog.startRow")
+                + " "
+                + getController().getConfig().getString(Config.LOAD_ROW_TO_START_AT)
+                + "\n"
+                + apiInfoStr
+            ); //$NON-NLS-1$
+        
+         label.getParent().pack();
     }
 
     /**
@@ -221,18 +186,24 @@ public class DataSelectionDialog extends Dialog {
      * @param shell
      *            the dialog window
      */
-    private void createContents(final Shell shell) {
+    protected void createContents(final Shell shell) {
 
         GridLayout layout = new GridLayout(2, false);
         layout.verticalSpacing = 10;
         shell.setLayout(layout);
 
         label = new Label(shell, SWT.WRAP);
-        label.setText(message);
+        label.setText(getMessage());
         GridData labelData = new GridData();
         labelData.horizontalSpan = 2;
         labelData.widthHint = 400;
         label.setLayoutData(labelData);
+        
+        contentNoteLimitLink = new ContentLimitLink(shell, SWT.WRAP, getController());
+        GridData linkData = new GridData();
+        linkData.horizontalSpan = 2;
+        linkData.widthHint = 400;
+        contentNoteLimitLink.setLayoutData(linkData);
 
         //the bottom separator
         Label labelSeparatorBottom = new Label(shell, SWT.SEPARATOR | SWT.HORIZONTAL);

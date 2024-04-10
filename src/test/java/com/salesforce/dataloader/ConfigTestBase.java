@@ -26,8 +26,8 @@
 package com.salesforce.dataloader;
 
 import com.salesforce.dataloader.config.Config;
-import com.salesforce.dataloader.exception.ConfigInitializationException;
-import com.salesforce.dataloader.exception.ParameterLoadException;
+import com.salesforce.dataloader.util.AppUtil;
+
 import org.junit.Before;
 
 import java.util.Collections;
@@ -65,14 +65,15 @@ public abstract class ConfigTestBase extends TestBase {
         }
     }
 
-    private final Map<String, String> testConfig;
+    private final Map<String, String> baseConfig;
 
     protected Map<String, String> getTestConfig() {
-        final HashMap<String, String> configBase = new HashMap<String, String>(this.testConfig);
+        final HashMap<String, String> configBase = new HashMap<String, String>(this.baseConfig);
         configBase.put(Config.LAST_RUN_OUTPUT_DIR, getTestStatusDir());
         for (TestProperties prop : getDefaultTestPropertiesSet()) {
             prop.putConfigSetting(configBase);
         }
+        configBase.put(AppUtil.CLI_OPTION_CONFIG_DIR_PROP, TEST_CONF_DIR);
         return configBase;
     }
 
@@ -91,24 +92,11 @@ public abstract class ConfigTestBase extends TestBase {
         if (testConfig == null) {
             testConfig = new HashMap<String, String>();
         }
-        this.testConfig = testConfig;
+        this.baseConfig = testConfig;
     }
 
     @Before
-    public void loadParameterOverrides() throws Exception {
-        getController().getConfig().loadParameterOverrides(getTestConfig());
+    public void setupController() throws Exception {
+        super.setupController(getTestConfig());
     }
-
-    @Override
-    protected void setupController() {
-        super.setupController();
-        try {
-            getController().getConfig().loadParameterOverrides(getTestConfig());
-        } catch (ParameterLoadException e) {
-            fail(e);
-        } catch (ConfigInitializationException e) {
-            fail(e);
-        }
-    }
-
 }

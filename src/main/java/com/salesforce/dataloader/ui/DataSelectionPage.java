@@ -29,26 +29,20 @@ package com.salesforce.dataloader.ui;
 import java.util.*;
 import java.util.Map.Entry;
 
-import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.LogManager;
 
 import org.eclipse.jface.preference.FileFieldEditor;
 import org.eclipse.jface.util.IPropertyChangeListener;
 import org.eclipse.jface.util.PropertyChangeEvent;
 import org.eclipse.jface.viewers.*;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.events.SelectionAdapter;
-import org.eclipse.swt.events.SelectionEvent;
+
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 
 import com.salesforce.dataloader.action.OperationInfo;
-import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.controller.Controller;
-import com.salesforce.dataloader.dao.DataAccessObjectFactory;
-import com.salesforce.dataloader.ui.entitySelection.*;
 import com.sforce.soap.partner.DescribeGlobalSObjectResult;
 
 /**
@@ -59,26 +53,14 @@ import com.sforce.soap.partner.DescribeGlobalSObjectResult;
  */
 public class DataSelectionPage extends LoadPage {
 
-    private final Logger logger = LogManager.getLogger(DataSelectionPage.class);
-
-    private final Controller controller;
-
     // These filter extensions are used to filter which files are displayed.
     private static final String[] FILTER_EXTS = { "*.csv" }; //$NON-NLS-1$
-    private final EntityFilter filter = new EntityFilter();
     private ListViewer lv;
 
     private FileFieldEditor csvChooser;
 
     public DataSelectionPage(Controller controller) {
-        super(Labels.getString("DataSelectionPage.data"), Labels.getString("DataSelectionPage.dataMsg"), UIUtils.getImageRegistry().getDescriptor("splashscreens")); //$NON-NLS-1$ //$NON-NLS-2$
-
-        this.controller = controller;
-
-        // Set the description
-        setDescription(Labels.getString("DataSelectionPage.message")); //$NON-NLS-1$
-
-        setPageComplete(false);
+        super("DataSelectionPage", controller); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Override
@@ -93,54 +75,8 @@ public class DataSelectionPage extends LoadPage {
 
         Composite comp = new Composite(parent, SWT.NONE);
         comp.setLayout(gridLayout);
-
-        Label label = new Label(comp, SWT.RIGHT);
-        label.setText(Labels.getString("DataSelectionPage.selectObject")); //$NON-NLS-1$
-        GridData data = new GridData();
-        label.setLayoutData(data);
-
-        // Add a checkbox to toggle filter
-        Button filterAll = new Button(comp, SWT.CHECK);
-        filterAll.setText(Labels.getString("DataSelectionPage.showAll")); //$NON-NLS-1$
-        data = new GridData();
-        filterAll.setLayoutData(data);
-
-        lv = new ListViewer(comp, SWT.H_SCROLL | SWT.V_SCROLL | SWT.BORDER);
-        lv.setContentProvider(new EntityContentProvider());
-        lv.setLabelProvider(new EntityLabelProvider());
-        lv.setInput(null);
-        data = new GridData(GridData.FILL, GridData.FILL, true, true);
-        data.heightHint = 140;
-        data.widthHint = 140;
-        lv.getControl().setLayoutData(data);
-        lv.addFilter(filter);
-        lv.setSorter(new EntityViewerSorter());
-
-        lv.addSelectionChangedListener(new ISelectionChangedListener() {
-            @Override
-            public void selectionChanged(SelectionChangedEvent event) {
-                checkPageComplete();
-            }
-
-        });
-
-        //if we're logged in, set the input
-        if (controller.isLoggedIn()) {
-            setInput(controller.getEntityDescribes());
-        }
-
-        filterAll.addSelectionListener(new SelectionAdapter() {
-            @Override
-            public void widgetSelected(SelectionEvent event) {
-                if (((Button)event.widget).getSelection())
-                    lv.removeFilter(filter);
-                else
-                    lv.addFilter(filter);
-            }
-        });
-
-        new Label(comp, SWT.NONE);
-
+        GridData data = new GridData(GridData.FILL_BOTH);
+        comp.setLayoutData(data);
         final String infoMessage = this.controller.getConfig().getOperationInfo().getInfoMessageForDataSelectionPage();
         if (infoMessage != null) {
             Label l = new Label(comp, SWT.RIGHT);
@@ -150,6 +86,17 @@ public class DataSelectionPage extends LoadPage {
             l.setText(infoMessage);
             l.setForeground(new Color(getShell().getDisplay(), 0xff, 0, 0));
         }
+        
+        lv = EntitySelectionListViewerUtil.getEntitySelectionListViewer(this.getClass(), comp, this.controller.getConfig());
+        lv.addSelectionChangedListener(new ISelectionChangedListener() {
+            @Override
+            public void selectionChanged(SelectionChangedEvent event) {
+                setPageComplete();
+            }
+
+        });
+
+        setupPage();
 
         new Label(comp, SWT.NONE);
 
@@ -157,7 +104,6 @@ public class DataSelectionPage extends LoadPage {
 
         Composite compChooser = new Composite(comp, SWT.NONE);
         data = new GridData(GridData.FILL_HORIZONTAL | GridData.VERTICAL_ALIGN_END);
-        data.widthHint = 400;
         compChooser.setLayoutData(data);
 
         csvChooser = new FileFieldEditor(
@@ -172,11 +118,11 @@ public class DataSelectionPage extends LoadPage {
 
                         if (!((Boolean)event.getNewValue()).booleanValue()) {
                             setErrorMessage(Labels.getString("DataSelectionPage.selectValid")); //$NON-NLS-1$
-                            checkPageComplete();
+                            setPageComplete();
 
                         } else {
                             setErrorMessage(null);
-                            checkPageComplete();
+                            setPageComplete();
                         }
                     } catch (ClassCastException cle) {
                         logger.error(Labels.getString("DataSelectionPage.errorClassCast"), cle); //$NON-NLS-1$
@@ -191,7 +137,7 @@ public class DataSelectionPage extends LoadPage {
     /**
      * Function to dynamically set the entity list
      */
-    private void setInput(Map<String, DescribeGlobalSObjectResult> entityDescribes) {
+    private void setInput(Map<String, DescribeGlobalSObjectResult> entityDescribes) {        
         OperationInfo operation = controller.getConfig().getOperationInfo();
         Map<String, DescribeGlobalSObjectResult> inputDescribes = new HashMap<String, DescribeGlobalSObjectResult>();
 
@@ -201,7 +147,7 @@ public class DataSelectionPage extends LoadPage {
             for (Entry<String, DescribeGlobalSObjectResult> entry : entityDescribes.entrySet()) {
                 String objectName = entry.getKey();
                 DescribeGlobalSObjectResult objectDesc = entry.getValue();
-                if (operation.isDelete() && objectDesc.isDeletable()) {
+                if ((operation.isDelete() || operation.isUndelete()) && objectDesc.isDeletable()) {
                     inputDescribes.put(objectName, objectDesc);
                 } else if (operation == OperationInfo.insert && objectDesc.isCreateable()) {
                     inputDescribes.put(objectName, objectDesc);
@@ -213,9 +159,8 @@ public class DataSelectionPage extends LoadPage {
             }
         }
         lv.setInput(inputDescribes);
-        lv.refresh();
         lv.getControl().getParent().pack();
-
+        lv.refresh();
     }
 
     private boolean checkEntityStatus() {
@@ -228,8 +173,7 @@ public class DataSelectionPage extends LoadPage {
 
     }
 
-    private void checkPageComplete() {
-
+    public void setPageComplete() {
         if (csvChooser.isValid() && checkEntityStatus()) {
             setPageComplete(true);
         } else {
@@ -246,20 +190,14 @@ public class DataSelectionPage extends LoadPage {
 
     @Override
     public LoadPage getNextPage() {
-        //attempt to login
-        Config config = controller.getConfig();
         //get entity
         IStructuredSelection selection = (IStructuredSelection)lv.getSelection();
-        DescribeGlobalSObjectResult entity = (DescribeGlobalSObjectResult)selection.getFirstElement();
-
-        config.setValue(Config.ENTITY, entity.getName());
-        // set DAO - CSV file name
-        config.setValue(Config.DAO_NAME, csvChooser.getStringValue());
-        // set DAO type to CSV
-        config.setValue(Config.DAO_TYPE, DataAccessObjectFactory.CSV_READ_TYPE);
-        controller.saveConfig();
-
-        DataSelectionDialog dlg = new DataSelectionDialog(getShell(), controller);
+        DescribeGlobalSObjectResult selectedEntity = (DescribeGlobalSObjectResult)selection.getFirstElement();
+        DataSelectionDialog dlg = new DataSelectionDialog(
+                                            getShell(), 
+                                            controller,
+                                            csvChooser.getStringValue(),
+                                            selectedEntity.getName());
         if (dlg.open()) {
             return super.getNextPage();
         } else {
@@ -272,13 +210,12 @@ public class DataSelectionPage extends LoadPage {
      * @see com.salesforce.dataloader.ui.LoadPage#setupPage()
      */
     @Override
-    boolean setupPage() {
-        Map<String, DescribeGlobalSObjectResult> describes = controller
-                .getEntityDescribes();
-        if(describes != null) {
-            setInput(describes);
-            return true;
+    public boolean setupPagePostLogin() {
+        Map<String, DescribeGlobalSObjectResult> describes = controller.getEntityDescribes();
+        if(describes == null) {
+            return false;
         }
-        return false;
+        setInput(describes);
+        return true;
     }
 }

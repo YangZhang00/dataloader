@@ -1,17 +1,23 @@
-#!/bin/sh -f
+#!/bin/sh 
+# script parameters
+#
 
-# $1 - password for the java key store containing code-signing cert
-# $2 - file name of the java key store.
+run_mvn() {
+  # run a mvn build to download dependencies from the central maven repo
+  mvn clean compile
+  # remove vulnerable class from log4j jar file
+  log4j_version_num=$(awk '/<artifactId>log4j-core/{getline; print}' pom.xml | awk '{$1=$1};1' )
+  log4j_version_num=${log4j_version_num#<version>};
+  log4j_version_num=${log4j_version_num%</version>};
+  
+  echo "removing JndiLookup.class from ${log4j_version_num}"
+  zip -q -d "${HOME}/.m2/repository/org/apache/logging/log4j/log4j-core/${log4j_version_num}/log4j-core-${log4j_version_num}.jar org/apache/logging/log4j/core/lookup/JndiLookup.class"
+  zip -q -d "${HOME}/.m2/repository/org/apache/logging/log4j/log4j-core/${log4j_version_num}/log4j-core-${log4j_version_num}.jar org/apache/logging/log4j/core/appender/mom/JmsAppender.class"
+  zip -q -d "${HOME}/.m2/repository/org/apache/logging/log4j/log4j-core/${log4j_version_num}/log4j-core-${log4j_version_num}.jar org/apache/logging/log4j/core/appender/db/jdbc/JdbcAppender.class"
 
-if [ "$#" -ne 2 ]; then
-  echo "Usage: $0 KeystorePassword KeystoreFile" >&2
-  exit 1
-fi
+  # build uber jar
+  mvn clean package
+}
 
-mvn clean package -DskipTests  -D"jarsigner.storepass=$1"  -D"jarsigner.keystore=$2" -D'jarsigner.skip=false' -D'jarsigner.alias=1' -Pzip
-
-cp target/mac/dataloader_mac.zip .
-
-mvn clean package -DskipTests -D"jarsigner.storepass=$1" -D"jarsigner.keystore=$2" -D'jarsigner.skip=false' -D'jarsigner.alias=1' -Pwin64,zip,-mac64
-
-cp target/win/dataloader_win.zip .
+#################
+run_mvn

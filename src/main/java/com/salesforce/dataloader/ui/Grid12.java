@@ -27,15 +27,12 @@
 package com.salesforce.dataloader.ui;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.CCombo;
-import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 
 import java.util.ArrayList;
-import java.util.Random;
 
 /**
  * Grid12 simplifies the creation of grid based layout
@@ -43,28 +40,18 @@ import java.util.Random;
 public class Grid12 {
     private Composite composite;
     private final int columnWidth;
-    private final int cellHeight;
     private final GridLayout root;
     private boolean grabExcessHorizontalSpace;
     private boolean grabExcessVerticalSpace;
 
-    public Grid12(Composite composite, int columnWidth){
-        this(composite, columnWidth, -1);
-    }
-    public Grid12(Composite composite, int columnWidth, int cellHeight){
-        this(composite, columnWidth, cellHeight, false, true);
-    }
-    public Grid12(Composite composite, int columnWidth, int cellHeight, boolean grabExcessVerticalSpace, boolean grabExcessHorizontalSpace) {
+    public Grid12(Composite composite, int columnWidth, boolean grabExcessVerticalSpace, boolean grabExcessHorizontalSpace) {
         this.composite = composite;
         this.columnWidth = columnWidth;
-        this.cellHeight = cellHeight;
         this.root = new GridLayout(12, true);
         this.composite.setLayout(root);
         this.grabExcessVerticalSpace = grabExcessVerticalSpace;
         this.grabExcessHorizontalSpace = grabExcessHorizontalSpace;
     }
-
-
 
     public GridLayout getRoot() {
         return root;
@@ -79,7 +66,6 @@ public class Grid12 {
         data.horizontalSpan = columnSpan;
         data.widthHint = columnSpan * this.columnWidth;
         data.horizontalAlignment = horizontalAlignment;
-        data.heightHint = cellHeight;
         data.grabExcessHorizontalSpace = grabExcessHorizontalSpace;
         data.grabExcessVerticalSpace = grabExcessVerticalSpace;
 
@@ -90,12 +76,8 @@ public class Grid12 {
         return columnWidth;
     }
 
-    public int getCellHeight() {
-        return cellHeight;
-    }
-
     public Label createLabel(int columns, String message) {
-        return createLabel(columns, message, SWT.RIGHT);
+        return createLabel(columns, message, SWT.RIGHT | SWT.WRAP);
     }
 
     public Label createLabel(int columns, String message, int style) {
@@ -147,9 +129,8 @@ public class Grid12 {
         return button;
     }
 
-    public CCombo createCombo(int columns, int style, ArrayList<String> labels) {
-        CCombo combo = new CCombo(composite, style);
-        combo.setEditable(false);
+    public Combo createCombo(int columns, int style, ArrayList<String> labels) {
+        Combo combo = new Combo(composite, style);
         combo.setLayoutData(createCell(columns));
         for (String label: labels) {
             combo.add(label);

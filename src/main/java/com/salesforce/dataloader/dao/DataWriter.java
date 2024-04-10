@@ -27,7 +27,6 @@
 package com.salesforce.dataloader.dao;
 
 import java.util.List;
-import java.util.Map;
 
 import com.salesforce.dataloader.exception.DataAccessObjectException;
 import com.salesforce.dataloader.exception.DataAccessObjectInitializationException;
@@ -62,4 +61,6 @@ public interface DataWriter extends DataAccessObject {
      * @throws DataAccessObjectException
      */
     boolean writeRowList(List<Row> inputRowList) throws DataAccessObjectException;
+    
+    public List<String> getColumnNamesFromRow(Row row) throws DataAccessObjectInitializationException;
 }

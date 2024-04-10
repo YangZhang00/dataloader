@@ -37,10 +37,8 @@ import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.exception.DataAccessObjectInitializationException;
 import com.salesforce.dataloader.ui.*;
 
-public class ExtractionFinishDialog extends Dialog {
-    private String message;
+public class ExtractionFinishDialog extends BaseDialog {
     private Label label;
-    private Controller controller;
     private Button ok;
 
     /**
@@ -50,65 +48,7 @@ public class ExtractionFinishDialog extends Dialog {
      *            the parent
      */
     public ExtractionFinishDialog(Shell parent, Controller controller) {
-        this(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
-        this.controller = controller;
-    }
-
-    /**
-     * InputDialog constructor
-     *
-     * @param parent
-     *            the parent
-     * @param style
-     *            the style
-     */
-    public ExtractionFinishDialog(Shell parent, int style) {
-        // Let users override the default styles
-        super(parent, style);
-        setText(Labels.getString("ExtractionFinishDialog.title"));   //$NON-NLS-1$
-    }
-
-    /**
-     * Gets the message
-     *
-     * @return String
-     */
-    public String getMessage() {
-        return message;
-    }
-
-    /**
-     * Sets the message
-     *
-     * @param message
-     *            the new message
-     */
-    public void setMessage(String message) {
-        this.message = message;
-    }
-
-    /**
-     * Opens the dialog and returns the input
-     *
-     * @return String
-     */
-    public boolean open() {
-        // Create the dialog window
-        Shell shell = new Shell(getParent(), getStyle());
-        shell.setText(getText());
-        shell.setImage(UIUtils.getImageRegistry().get("sfdc_icon")); //$NON-NLS-1$
-        createContents(shell);
-        shell.pack();
-        shell.open();
-        Display display = getParent().getDisplay();
-
-        while (!shell.isDisposed()) {
-            if (!display.readAndDispatch()) {
-                display.sleep();
-            }
-        }
-        // Return the sucess
-        return true;
+        super(parent, controller);
     }
 
     /**
@@ -117,7 +57,7 @@ public class ExtractionFinishDialog extends Dialog {
      * @param shell
      *            the dialog window
      */
-    private void createContents(final Shell shell) {
+    protected void createContents(final Shell shell) {
 
         GridData data;
 
@@ -132,7 +72,7 @@ public class ExtractionFinishDialog extends Dialog {
         labelInfo.setLayoutData(data);
 
         label = new Label(shell, SWT.NONE);
-        label.setText(message);
+        label.setText(getMessage());
         data = new GridData(GridData.HORIZONTAL_ALIGN_BEGINNING | GridData.VERTICAL_ALIGN_BEGINNING);
         label.setLayoutData(data);
 
@@ -149,7 +89,7 @@ public class ExtractionFinishDialog extends Dialog {
         buttonComp.setLayoutData(data);
 
         // error status output is optional
-        boolean enableStatusOutput = controller.getConfig().getBoolean(Config.ENABLE_EXTRACT_STATUS_OUTPUT);
+        boolean enableStatusOutput = getController().getConfig().getBoolean(Config.ENABLE_EXTRACT_STATUS_OUTPUT);
         if (enableStatusOutput) {
             layout = new GridLayout(3, false);
         } else {
@@ -164,7 +104,7 @@ public class ExtractionFinishDialog extends Dialog {
         viewExtraction.addSelectionListener(new SelectionListener() {
             @Override
             public void widgetSelected(SelectionEvent e) {
-                openViewer(controller.getConfig().getString(Config.DAO_NAME));
+                openViewer(getController().getConfig().getString(Config.DAO_NAME), false);
             }
 
             @Override
@@ -181,7 +121,7 @@ public class ExtractionFinishDialog extends Dialog {
             viewErrors.addSelectionListener(new SelectionListener() {
                 @Override
                 public void widgetSelected(SelectionEvent e) {
-                    openViewer(controller.getConfig().getString(Config.OUTPUT_ERROR));
+                    openViewer(getController().getConfig().getString(Config.OUTPUT_ERROR), true);
                 }
 
                 @Override
@@ -205,9 +145,8 @@ public class ExtractionFinishDialog extends Dialog {
         shell.setDefaultButton(ok);
     }
 
-    private void openViewer(String filename) {
-        CSVViewerDialog dlg = new CSVViewerDialog(getParent(), controller);
-        dlg.setUseCustomSplitter(false);
+    private void openViewer(String filename, boolean ignoreDelimiterConfig) {
+        CSVViewerDialog dlg = new CSVViewerDialog(getParent(), getController(), ignoreDelimiterConfig, true);
         dlg.setNumberOfRows(200000);
         dlg.setFileName(filename);
         try {

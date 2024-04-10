@@ -47,6 +47,7 @@ import com.salesforce.dataloader.exception.LoadException;
 import com.salesforce.dataloader.exception.MappingInitializationException;
 import com.salesforce.dataloader.exception.OperationException;
 import com.salesforce.dataloader.exception.ParameterLoadException;
+import com.salesforce.dataloader.util.AppUtil;
 import com.sforce.async.AsyncApiException;
 import com.sforce.soap.partner.fault.ApiFault;
 import com.sforce.ws.ConnectionException;
@@ -63,8 +64,8 @@ abstract class AbstractAction implements IAction {
     private final Controller controller;
     private final IVisitor visitor;
 
-    private final DataWriter successWriter;
-    private final DataWriter errorWriter;
+    protected DataWriter successWriter;
+    protected DataWriter errorWriter;
     private final DataAccessObject dao;
 
     private final Logger logger;
@@ -146,6 +147,9 @@ abstract class AbstractAction implements IAction {
                 exceptions.add(e);
             }
             try {
+                if (this.errorWriter != null) {
+                    getMonitor().setNumberRowsWithError(this.errorWriter.getCurrentRowNumber());
+                }
                 //if no exceptions occurred then display success/error
                 if (exceptions.size() == 0) {
                     final Object[] args = {String.valueOf(getVisitor().getNumberSuccesses()),
@@ -170,9 +174,11 @@ abstract class AbstractAction implements IAction {
 
     private void closeAll() {
         getDao().close();
-        if (writeStatus()) {
-            getSuccessWriter().close();
-            getErrorWriter().close();
+        if (this.successWriter != null) {
+            this.successWriter.close();
+        }
+        if (this.errorWriter != null) {
+            this.errorWriter.close();
         }
     }
 
@@ -209,7 +215,7 @@ abstract class AbstractAction implements IAction {
         return this.successWriter;
     }
 
-    protected IVisitor getVisitor() {
+    public IVisitor getVisitor() {
         return this.visitor;
     }
 
@@ -228,31 +234,41 @@ abstract class AbstractAction implements IAction {
      * @return Error Writer
      * @throws DataAccessObjectInitializationException
      */
-    private DataWriter createErrorWriter() throws DataAccessObjectInitializationException {
+    public DataWriter createErrorWriter() throws DataAccessObjectInitializationException {
         final String filename = getConfig().getString(Config.OUTPUT_ERROR);
         if (filename == null || filename.length() == 0)
             throw new DataAccessObjectInitializationException(getMessage("errorMissingErrorFile"));
         // TODO: Make sure that specific DAO is not mentioned: use DataReader, DataWriter, or DataAccessObject
-        return new CSVFileWriter(filename, getConfig());
+        this.errorWriter = new CSVFileWriter(filename, getConfig(), AppUtil.COMMA);
+        return this.errorWriter;
     }
 
     /**
      * @return Success Writer
      * @throws DataAccessObjectInitializationException
      */
-    private DataWriter createSuccesWriter() throws DataAccessObjectInitializationException {
+    public DataWriter createSuccesWriter() throws DataAccessObjectInitializationException {
         final String filename = getConfig().getString(Config.OUTPUT_SUCCESS);
         if (filename == null || filename.length() == 0)
             throw new DataAccessObjectInitializationException(getMessage("errorMissingSuccessFile"));
         // TODO: Make sure that specific DAO is not mentioned: use DataReader, DataWriter, or DataAccessObject
-        return new CSVFileWriter(filename, getConfig());
+        this.successWriter = new CSVFileWriter(filename, getConfig(), AppUtil.COMMA);
+        return this.successWriter;
     }
 
-    private void openErrorWriter(List<String> headers) throws OperationException {
+    public void openErrorWriter(List<String> headers) throws OperationException {
         headers = new LinkedList<String>(headers);
+        Config config = this.controller.getConfig();
 
-        // add the ERROR column
-        headers.add(Config.ERROR_COLUMN_NAME);
+        if (config.isBulkV2APIEnabled()
+        	&& !config.getString(Config.OPERATION).equals(OperationInfo.extract.name())
+        	&& !config.getString(Config.OPERATION).equals(OperationInfo.extract_all.name())) {
+            headers.add(0, Config.ID_COLUMN_NAME);
+        	headers.add(1, Config.ERROR_COLUMN_NAME);
+        } else {
+	        // add the ERROR column
+	        headers.add(Config.ERROR_COLUMN_NAME);
+        }
         try {
             getErrorWriter().open();
             getErrorWriter().setColumnNames(headers);
@@ -262,14 +278,24 @@ abstract class AbstractAction implements IAction {
         }
     }
 
-    private void openSuccessWriter(List<String> headers) throws LoadException {
+    public void openSuccessWriter(List<String> headers) throws LoadException {
         headers = new LinkedList<String>(headers);
+        Config config = this.controller.getConfig();
 
         // add the ID column if not there already
-        if (!Config.ID_COLUMN_NAME.equals(headers.get(0))) {
-            headers.add(0, Config.ID_COLUMN_NAME);
+        if (config.isBulkV2APIEnabled()
+        	&& !config.getString(Config.OPERATION).equals(OperationInfo.extract.name())
+        	&& !config.getString(Config.OPERATION).equals(OperationInfo.extract_all.name())) {
+            if (headers.size() == 0 || !Config.ID_COLUMN_NAME.equals(headers.get(0))) {
+                headers.add(0, Config.ID_COLUMN_NAME);
+            }
+            headers.add(1, Config.STATUS_COLUMN_NAME_IN_BULKV2);
+        } else {
+	        if (!Config.ID_COLUMN_NAME.equals(headers.get(0))) {
+	            headers.add(0, Config.ID_COLUMN_NAME);
+	        }
+	        headers.add(Config.STATUS_COLUMN_NAME);
         }
-        headers.add(Config.STATUS_COLUMN_NAME);
         try {
             getSuccessWriter().open();
             getSuccessWriter().setColumnNames(headers);

@@ -29,6 +29,7 @@ package com.salesforce.dataloader.mapping;
 import com.salesforce.dataloader.client.PartnerClient;
 import com.salesforce.dataloader.exception.MappingInitializationException;
 import com.salesforce.dataloader.model.Row;
+import com.salesforce.dataloader.util.AppUtil;
 import com.sforce.soap.partner.Field;
 
 import org.apache.logging.log4j.Logger;
@@ -36,7 +37,8 @@ import org.apache.logging.log4j.LogManager;
 import org.springframework.util.StringUtils;
 
 import java.util.Collection;
-import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
@@ -65,21 +67,35 @@ public class LoadMapper extends Mapper {
     }
 
     public Map<String, String> getMappingWithUnmappedColumns(boolean includeUnmapped) {
-        final Map<String, String> result = new HashMap<String, String>(getMap());
-        if (includeUnmapped) {
-            for (String daoColumn : getDaoColumns()) {
-                if (getMapping(daoColumn, true) == null) result.put(daoColumn, null);
+        final CaseInsensitiveMap result = new CaseInsensitiveMap();
+        
+        // get mappings in the same order as DAO column order
+        for (String daoColumn : getDaoColumns()) {
+            String mapping = getMapping(daoColumn);
+            if (includeUnmapped || mapping != null) {
+                result.put(daoColumn, mapping);
             }
         }
+        
+        // Make sure to not miss existing mappings even if they are not in DAO.
+        for (Map.Entry<String, String> currentMapEntry : getMap().entrySet()) {
+            if (!result.containsKey(currentMapEntry.getKey())) {
+                result.put(currentMapEntry.getKey(), currentMapEntry.getValue());
+            }
+        }
+        
         return result;
     }
 
     public Row mapData(Row localRow) {
         Row mappedData = new Row();
         for (Map.Entry<String, Object> entry : localRow.entrySet()) {
-            String sfdcName = getMapping(entry.getKey(), true);
-            if (StringUtils.hasText(sfdcName)) {
-                mappedData.put(sfdcName, entry.getValue());
+            String sfdcNameList = getMapping(entry.getKey(), true);
+            if (StringUtils.hasText(sfdcNameList)) {
+                String sfdcNameArray[] = sfdcNameList.split(AppUtil.COMMA);
+                for (String sfdcName : sfdcNameArray) {
+                    mappedData.put(sfdcName.trim(), entry.getValue());
+                }
             } else {
                 logger.info("Mapping for field " + entry.getKey() + " will be ignored since destination column is empty");
             }
@@ -90,13 +106,35 @@ public class LoadMapper extends Mapper {
 
     public void verifyMappingsAreValid() throws MappingInitializationException {
         for (Map.Entry<String, String> entry : getMappingWithUnmappedColumns(false).entrySet()) {
-            String sfdcName = entry.getValue();
-            if(StringUtils.hasText(sfdcName)) {
-                final Field f = getClient().getField(sfdcName);
-                if (f == null)
-                    throw new MappingInitializationException("Field mapping is invalid: " + entry.getKey() + " => " + sfdcName);
+            String sfdcNameList = entry.getValue();
+            if(StringUtils.hasText(sfdcNameList)) {
+                String sfdcNameArray[] = sfdcNameList.split(AppUtil.COMMA);
+                for (String sfdcName : sfdcNameArray) {
+                    final Field f = getClient().getField(sfdcName.trim());
+                    if (f == null)
+                        throw new MappingInitializationException("Field mapping is invalid: " + entry.getKey() + " => " + sfdcName);
+                }
             }
         }
+    }
+    
+    public List<String> getMappedDaoColumns() {
+        Map<String, String> possibleMappings = this.getMappingWithUnmappedColumns(true);
+        LinkedList<String> mappedColList = new LinkedList<String>();
+        for (String daoCol : possibleMappings.keySet()) {
+            String mappedName = this.map.get(daoCol);
+            if (mappedName != null) {
+                if (mappedName.contains(",")) {
+                    String[] mappedNameList = mappedName.split(",");
+                    for (int i=0; i<mappedNameList.length; i++) {
+                        mappedColList.add(mappedNameList[i]);
+                    }
+                } else {
+                    mappedColList.add(daoCol);
+                }
+            }
+        }
+        return mappedColList;
     }
 
 }

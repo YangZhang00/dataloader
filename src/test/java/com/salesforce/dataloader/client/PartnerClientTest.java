@@ -26,7 +26,7 @@
 package com.salesforce.dataloader.client;
 
 import com.salesforce.dataloader.config.Config;
-import com.salesforce.dataloader.dyna.ObjectField;
+import com.salesforce.dataloader.dyna.ParentIdLookupFieldFormatter;
 import com.salesforce.dataloader.dyna.SforceDynaBean;
 import com.salesforce.dataloader.process.ProcessTestBase;
 import com.sforce.soap.partner.DeleteResult;
@@ -42,6 +42,7 @@ import org.apache.commons.beanutils.BeanUtils;
 import org.apache.commons.beanutils.DynaBean;
 import org.apache.commons.beanutils.DynaProperty;
 import org.junit.Assert;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -61,6 +62,7 @@ import static org.junit.Assert.assertTrue;
  * @author Alex Warshavsky
  * @since 8.0
  */
+@SuppressWarnings("unused")
 public class PartnerClientTest extends ProcessTestBase {
 
     @Test
@@ -69,10 +71,10 @@ public class PartnerClientTest extends ProcessTestBase {
         assertFalse(getController().getConfig().getBoolean(Config.SFDC_INTERNAL_IS_SESSION_ID_LOGIN));
         boolean connect = client.connect();
         assertTrue(connect);
-        assertNotNull(client.getClient());
+        assertNotNull(client.getConnection());
 
         client.connect(client.getSession());
-        assertTrue(client.getClient().getDisableFeedTrackingHeader().isDisableFeedTracking());
+        assertTrue(client.getConnection().getDisableFeedTrackingHeader().isDisableFeedTracking());
     }
 
     @Test
@@ -200,17 +202,12 @@ public class PartnerClientTest extends ProcessTestBase {
     @Test
     public void testSetEntityDescribe() throws Exception{
         PartnerClient client = new PartnerClient(getController());
-        assertTrue(client.setEntityDescribes());
         assertNotNull(client.getDescribeGlobalResults());
-        assertEquals(client.getEntityTypes().getSobjects().length, client
-                .getDescribeGlobalResults().size());
     }
 
     @Test
     public void testDescribeSObjects() throws Exception {
         PartnerClient client = new PartnerClient(getController());
-        assertTrue(client.getEntityDescribeMap().isEmpty());
-        client.setEntityDescribes();
 
         int numDescribes = 0;
         for (String objectType : client.getDescribeGlobalResults().keySet()){
@@ -219,7 +216,6 @@ public class PartnerClientTest extends ProcessTestBase {
         		numDescribes++;
                 assertNotNull(describeResult);
                 assertEquals(objectType, describeResult.getName());
-                assertEquals(numDescribes, client.getEntityDescribeMap().size());
         	} catch (Exception ex) {
         		if (ex.getMessage().contains("jsonNot")) {
         			System.out.println("PartnerClient.testDescribeSObjects: Unable to call describeSObject for " + objectType);
@@ -287,6 +283,15 @@ public class PartnerClientTest extends ProcessTestBase {
 
     @Test
     public void testUpdateBasic() throws Exception {
+        doTestUpdateBasic(false);
+    }
+    
+    @Test
+    public void testUpdateBasicWithoutCompression() throws Exception {
+        doTestUpdateBasic(true);
+    }
+        
+    private void doTestUpdateBasic(boolean noCompression) throws Exception {
         String id = getRandomAccountId();
 
         // setup our dynabeans
@@ -307,6 +312,8 @@ public class PartnerClientTest extends ProcessTestBase {
 
         List<DynaBean> beanList = new ArrayList<DynaBean>();
         beanList.add(sforceObj);
+        
+        getController().getConfig().setValue(Config.NO_COMPRESSION, noCompression);
 
         // get the client and make the insert call
         PartnerClient client = new PartnerClient(getController());
@@ -423,7 +430,7 @@ public class PartnerClientTest extends ProcessTestBase {
                     doUpsertAccount(false);
                     parentExtIdValue = getRandomExtId("Account", ACCOUNT_WHERE_CLAUSE, extIdValue);
                 }
-                sforceMapping.put(ObjectField.formatAsString("Parent", extIdField), parentExtIdValue);
+                sforceMapping.put(new ParentIdLookupFieldFormatter(null, "Parent", extIdField).toString(), parentExtIdValue);
             }
 
             doUpsert("Account", sforceMapping);
@@ -460,7 +467,7 @@ public class PartnerClientTest extends ProcessTestBase {
                     doUpsertAccount(false);
                     accountExtIdValue = getRandomExtId("Account", ACCOUNT_WHERE_CLAUSE, accountExtIdValue);
                 }
-                sforceMapping.put(ObjectField.formatAsString("Account", acctExtIdField), accountExtIdValue);
+                sforceMapping.put(new ParentIdLookupFieldFormatter(null, "Account", acctExtIdField).toString(), accountExtIdValue);
 
                 // restore ext id field
                 setExtIdField(oldExtIdField);
@@ -470,29 +477,6 @@ public class PartnerClientTest extends ProcessTestBase {
 
         } finally {
             setExtIdField(origExtIdField);
-        }
-    }
-
-    private void doUpsert(String entity, Map<String, Object> sforceMapping) throws Exception {
-        // now convert to a dynabean array for the client
-        // setup our dynabeans
-        BasicDynaClass dynaClass = setupDynaClass(entity);
-
-        DynaBean sforceObj = dynaClass.newInstance();
-
-        // This does an automatic conversion of types.
-        BeanUtils.copyProperties(sforceObj, sforceMapping);
-
-        List<DynaBean> beanList = new ArrayList<DynaBean>();
-        beanList.add(sforceObj);
-
-        // get the client and make the insert call
-        PartnerClient client = new PartnerClient(getController());
-        UpsertResult[] results = client.loadUpserts(beanList);
-        for (UpsertResult result : results) {
-            if (!result.getSuccess()) {
-                Assert.fail("Upsert returned an error: " + result.getErrors()[0].getMessage());
-            }
         }
     }
 
@@ -516,7 +500,7 @@ public class PartnerClientTest extends ProcessTestBase {
         if (upsertFk) {
             sforceMapping.put(extIdField, extIdValue);
             // forget to set the foreign key external id value
-            sforceMapping.put(ObjectField.formatAsString("Parent", extIdField), "bogus");
+            sforceMapping.put(new ParentIdLookupFieldFormatter(null, "Parent", extIdField).toString(), "bogus");
         }
 
         // now convert to a dynabean array for the client
@@ -644,68 +628,4 @@ public class PartnerClientTest extends ProcessTestBase {
 
         return records[0].getId();
     }
-
-    /**
-     * Make sure to set external id field
-     */
-    private String setExtIdField(String extIdField) {
-        getController().getConfig().setValue(Config.EXTERNAL_ID_FIELD, extIdField);
-        return extIdField;
-    }
-
-    /**
-     * Get a random account external id for upsert testing
-     * 
-     * @param entity
-     *            TODO
-     * @param whereClause
-     *            TODO
-     * @param prevValue
-     *            Indicate that the value should be different from the specified
-     *            value or null if uniqueness not required
-     * @return String Account external id value
-     */
-    private Object getRandomExtId(String entity, String whereClause, Object prevValue) throws ConnectionException {
-
-        // insert couple of accounts so there're at least two records to work with
-        upsertSfdcRecords(entity, 2);
-
-        // get the client and make the query call
-        String extIdField = getController().getConfig().getString(Config.EXTERNAL_ID_FIELD);
-        PartnerClient client = new PartnerClient(getController());
-        // only get the records that have external id set, avoid nulls
-        String soql = "select " + extIdField + " from " + entity + " where " + whereClause + " and " + extIdField
-                + " != null";
-        if (prevValue != null) {
-            soql += " and "
-                    + extIdField
-                    + "!= "
-                    + (prevValue.getClass().equals(String.class) ? ("'" + prevValue + "'") : String
-                            .valueOf(prevValue));
-        }
-        QueryResult result = client.query(soql);
-        SObject[] records = result.getRecords();
-        assertNotNull("Operation should return non-null values", records);
-        assertTrue("Operation should return 1 or more records", records.length > 0);
-        assertNotNull("Records should have non-null field: " + extIdField + " values", records[0]
-                .getField(extIdField));
-
-        return records[0].getField(extIdField);
-    }
-
-    private BasicDynaClass setupDynaClass(String entity) throws ConnectionException {
-        getController().getConfig().setValue(Config.ENTITY, entity);
-        PartnerClient client = getController().getPartnerClient();
-        if (!client.isLoggedIn()) {
-            client.connect();
-        }
-
-        getController().setFieldTypes();
-        getController().setReferenceDescribes();
-        DynaProperty[] dynaProps = SforceDynaBean.createDynaProps(getController().getPartnerClient().getFieldTypes(), getController());
-        BasicDynaClass dynaClass = SforceDynaBean.getDynaBeanInstance(dynaProps);
-        SforceDynaBean.registerConverters(getController().getConfig());
-        return dynaClass;
-    }
-
 }

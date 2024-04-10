@@ -34,6 +34,7 @@ import org.eclipse.jface.viewers.ViewerDropAdapter;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.TransferData;
 
+import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.ui.MappingDialog;
 
 /**
@@ -43,42 +44,73 @@ import com.salesforce.dataloader.ui.MappingDialog;
  * @since 6.0
  */
 public class MappingDropAdapter extends ViewerDropAdapter {
+    public enum MAPPING_CHOICE {
+        ADD,
+        REPLACE,
+        CANCEL;
+    }
+    private static final String MAPPING_DELIMITER = ", ";
+    private final MappingDialog mappingDialog;
+    private String currentSforceMappings;
+    private String sforceFieldToAddOrReplace;
+    private Map.Entry<String, String> dropEntry;
+    private Controller controller;
 
-    private final MappingDialog dlg;
-
-    public MappingDropAdapter(TableViewer arg0, MappingDialog dlg) {
+    public MappingDropAdapter(TableViewer arg0, MappingDialog dlg, Controller controller) {
         super(arg0);
-        this.dlg = dlg;
+        this.mappingDialog = dlg;
+        this.controller = controller;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
-    public boolean performDrop(Object arg0) {
-
-        TableViewer viewer = (TableViewer)getViewer();
-
-        @SuppressWarnings("unchecked")
-        Map.Entry<String, String> entry = (Entry<String, String>)getCurrentTarget();
-
-        //replenish the old
-        String oldSforce = entry.getValue();
-        if (oldSforce != null && oldSforce.length() > 0) {
-            dlg.replenishField(oldSforce);
+    public boolean performDrop(Object arg0) {        
+        this.dropEntry = (Entry<String, String>)getCurrentTarget();
+        this.currentSforceMappings = this.dropEntry.getValue();
+        this.sforceFieldToAddOrReplace = (String)arg0;
+        
+        if (this.currentSforceMappings == null || this.currentSforceMappings.isBlank()) {
+            // if no existing mapping, perform add action
+            performDropAction(MAPPING_CHOICE.ADD);
+        } else {
+            // ask user to add, replace, or cancel action if a mapping exists
+            MappingDropActionDialog selectDropActionDlg = new MappingDropActionDialog(
+                    this, controller,
+                    this.dropEntry.getKey(), 
+                    this.currentSforceMappings,
+                    this.sforceFieldToAddOrReplace);
+            selectDropActionDlg.open();
         }
-
-        entry.setValue((String)arg0);
-        dlg.getMapper().putMapping(entry.getKey(), entry.getValue());
-
-        viewer.refresh();
-        dlg.packMappingColumns();
-
-
         return true;
+    }
+    
+    public void performDropAction(MAPPING_CHOICE choice) {
+        String newSforceMappings = this.sforceFieldToAddOrReplace;
+        if (choice == MAPPING_CHOICE.CANCEL) {
+            return;
+        }
+        if (this.currentSforceMappings != null && !this.currentSforceMappings.isBlank()) {
+            if (choice == MAPPING_CHOICE.ADD) {
+                // add to existing mappings
+                newSforceMappings = this.currentSforceMappings + MAPPING_DELIMITER + this.sforceFieldToAddOrReplace;
+            } else { // choice == MAPPING_CHOICE.REPLACE
+                //add replaced Salesforce fields in sforceFieldsViewer so that they are available for mapping to other fields
+                mappingDialog.replenishMappedSforceFields(this.currentSforceMappings);
+            }
+        }
+        this.dropEntry.setValue(newSforceMappings);
+        mappingDialog.getMapper().putMapping(this.dropEntry.getKey(), this.dropEntry.getValue());
+        mappingDialog.packMappingColumns();
     }
 
     @Override
     public boolean validateDrop(Object arg0, int arg1, TransferData arg2) {
 
         return TextTransfer.getInstance().isSupportedType(arg2);
+    }
+    
+    public MappingDialog getMappingDialog() {
+        return this.mappingDialog;
     }
 
 }

@@ -28,88 +28,32 @@ package com.salesforce.dataloader.ui.extraction;
 
 import java.io.File;
 
-import org.eclipse.jface.preference.DirectoryFieldEditor;
-import org.eclipse.swt.SWT;
-import org.eclipse.swt.layout.GridData;
-import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Label;
-
-import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.exception.ProcessInitializationException;
+import com.salesforce.dataloader.ui.FinishPage;
 import com.salesforce.dataloader.ui.Labels;
 import com.salesforce.dataloader.ui.UIUtils;
 
 /**
- * Last page of extraction wizard which lets the user select directory for status files (currently, only error status is
+ * Last page of extraction wizard which lets the user select folder for status files (currently, only error status is
  * generated in case of extract)
  * 
  * @author Alex Warshavsky
  * @since 8.0
  */
-public class ExtractionFinishPage extends ExtractionPage {
-
-    private final Controller controller;
-    private DirectoryFieldEditor dirFE;
+public class ExtractionFinishPage extends FinishPage {
 
     public ExtractionFinishPage(Controller controller) {
-        super(Labels.getString("FinishPage.title"), Labels.getString("FinishPage.finishMsg"), UIUtils.getImageRegistry().getDescriptor("splashscreens")); //$NON-NLS-1$ //$NON-NLS-2$
-
-        this.controller = controller;
-        setPageComplete(false);
-
-        // Set the description
-        setDescription(Labels.getString("FinishPage.selectDir")); //$NON-NLS-1$
-
+        super("ExtractionFinishPage", controller); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Override
-    public void createControl(Composite parent) {
-        Composite comp = new Composite(parent, SWT.NONE);
-        //comp.setBackground(Display.getCurrent().getSystemColor(SWT.COLOR_WHITE));
-
-        GridLayout gridLayout = new GridLayout(1, false);
-        gridLayout.horizontalSpacing = 10;
-        gridLayout.marginHeight = 20;
-        comp.setLayout(gridLayout);
-
-        Label label = new Label(comp, SWT.CENTER);
-        label.setText(Labels.getString("FinishPage.overwritten")); //$NON-NLS-1$
-
-        Composite dirComp = new Composite(comp, SWT.NONE);
-        GridData data = new GridData();
-        data.widthHint = 400;
-        dirComp.setLayoutData(data);
-
-        dirFE = new DirectoryFieldEditor(
-                Labels.getString("FinishPage.output"), Labels.getString("FinishPage.chooseDir"), dirComp); //$NON-NLS-1$ //$NON-NLS-2$
-        dirFE.setStringValue(controller.getConfig().getString(Config.OUTPUT_STATUS_DIR));
-
-        setControl(comp);
-    }
-
-    public String getOutputDir() {
-        return dirFE.getStringValue();
-    }
-
-    @Override
-    public boolean canFlipToNextPage() {
-        // this is always the last page, disable next
-        return false;
-    }
-
-    /*
-     * (non-Javadoc)
-     * @see com.salesforce.dataloader.ui.extraction.ExtractionPage#finishPage()
-     */
-    @Override
-    public boolean finishPage() {
+    public boolean finishAllowed() {
         // validate the status output
         String outputDirName = getOutputDir();
         File statusDir = new File(outputDirName);
         if (!statusDir.exists() || !statusDir.isDirectory()) {
-            UIUtils.errorMessageBox(getShell(), Labels.getString("LoadWizard.errorValidDirectory")); //$NON-NLS-1$
+            UIUtils.errorMessageBox(getShell(), Labels.getString("LoadWizard.errorValidFolder")); //$NON-NLS-1$
             return false;
         }
         // set the files for status output
@@ -121,5 +65,15 @@ public class ExtractionFinishPage extends ExtractionPage {
             return false;
         }
         return true;
+    }
+
+    protected boolean setupPagePostLogin() {
+        setPageComplete();
+        return true;
+    }
+    
+    @Override
+    public String getConfigInfo() {
+        return ExtractionPage.getConfigInfo(controller.getConfig());
     }
 }

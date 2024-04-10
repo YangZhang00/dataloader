@@ -36,9 +36,11 @@ package com.salesforce.dataloader.client;
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.controller.Controller;
+import com.salesforce.dataloader.dyna.ParentIdLookupFieldFormatter;
 import com.salesforce.dataloader.dyna.SforceDynaBean;
 import com.salesforce.dataloader.exception.ParameterLoadException;
 import com.salesforce.dataloader.exception.PasswordExpiredException;
+import com.salesforce.dataloader.exception.RelationshipFormatException;
 import com.sforce.soap.partner.Connector;
 import com.sforce.soap.partner.DeleteResult;
 import com.sforce.soap.partner.DescribeGlobalResult;
@@ -46,12 +48,18 @@ import com.sforce.soap.partner.DescribeGlobalSObjectResult;
 import com.sforce.soap.partner.DescribeSObjectResult;
 import com.sforce.soap.partner.Error;
 import com.sforce.soap.partner.Field;
+import com.sforce.soap.partner.GetUserInfoResult;
+import com.sforce.soap.partner.LimitInfo;
+import com.sforce.soap.partner.LimitInfoHeader_element;
 import com.sforce.soap.partner.LoginResult;
 import com.sforce.soap.partner.PartnerConnection;
 import com.sforce.soap.partner.QueryResult;
 import com.sforce.soap.partner.SaveResult;
+import com.sforce.soap.partner.UndeleteResult;
 import com.sforce.soap.partner.UpsertResult;
 import com.sforce.soap.partner.fault.ApiFault;
+import com.sforce.soap.partner.fault.ExceptionCode;
+import com.sforce.soap.partner.fault.UnexpectedErrorFault;
 import com.sforce.soap.partner.sobject.SObject;
 import com.sforce.ws.ConnectionException;
 import com.sforce.ws.ConnectorConfig;
@@ -74,7 +82,8 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
     private static Logger LOG = LogManager.getLogger(PartnerClient.class);
 
-    PartnerConnection client;
+    PartnerConnection connection;
+    private ConnectorConfig connectorConfig = null;
 
     private static interface ClientOperation<RESULT, ARG> {
         String getName();
@@ -90,7 +99,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public SaveResult[] run(SObject[] sObjects) throws ConnectionException {
-            return getClient().create(sObjects);
+            return getConnection().create(sObjects);
         }
     };
 
@@ -102,7 +111,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public SaveResult[] run(SObject[] sObjects) throws ConnectionException {
-            return getClient().update(sObjects);
+            return getConnection().update(sObjects);
         }
     };
 
@@ -114,7 +123,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public UpsertResult[] run(SObject[] sObjects) throws ConnectionException {
-            return getClient().upsert(config.getString(Config.EXTERNAL_ID_FIELD), sObjects);
+            return getConnection().upsert(config.getString(Config.EXTERNAL_ID_FIELD), sObjects);
         }
     };
 
@@ -126,10 +135,22 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public DeleteResult[] run(String[] ids) throws ConnectionException {
-            return getClient().delete(ids);
+            return getConnection().delete(ids);
         }
     };
 
+    private final ClientOperation<UndeleteResult[], String[]> UNDELETE_OPERATION = new ClientOperation<UndeleteResult[], String[]>() {
+        @Override
+        public String getName() {
+            return "undelete";
+        }
+
+        @Override
+        public UndeleteResult[] run(String[] ids) throws ConnectionException {
+            return getConnection().undelete(ids);
+        }
+    };
+    
     private final ClientOperation<QueryResult, String> QUERY_OPERATION = new ClientOperation<QueryResult, String>() {
         @Override
         public String getName() {
@@ -138,7 +159,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public QueryResult run(String queryString) throws ConnectionException {
-            return getClient().query(queryString);
+            return getConnection().query(queryString);
         }
     };
 
@@ -150,7 +171,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public QueryResult run(String queryString) throws ConnectionException {
-            return getClient().queryAll(queryString);
+            return getConnection().queryAll(queryString);
         }
     };
 
@@ -162,7 +183,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public QueryResult run(String queryString) throws ConnectionException {
-            return getClient().queryMore(queryString);
+            return getConnection().queryMore(queryString);
         }
     };
 
@@ -187,7 +208,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public DescribeGlobalResult run(Object ignored) throws ConnectionException {
-            return getClient().describeGlobal();
+            return getConnection().describeGlobal();
         }
     };
 
@@ -199,14 +220,14 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public DescribeSObjectResult run(String entity) throws ConnectionException {
-            return getClient().describeSObject(entity);
+            return getConnection().describeSObject(entity);
         }
     };
 
-    private DescribeGlobalResult entityTypes;
-    private final Map<String, DescribeRefObject> referenceDescribes = new HashMap<String, DescribeRefObject>();
-    private final Map<String, DescribeGlobalSObjectResult> describeGlobalResults = new HashMap<String, DescribeGlobalSObjectResult>();
-    private final Map<String, DescribeSObjectResult> entityDescribes = new HashMap<String, DescribeSObjectResult>();
+    private DescribeGlobalResult describeGlobalResults;
+    private final ReferenceEntitiesDescribeMap referenceEntitiesDescribesMap = new ReferenceEntitiesDescribeMap();
+    private final Map<String, DescribeGlobalSObjectResult> describeGlobalResultsMap = new HashMap<String, DescribeGlobalSObjectResult>();
+    private final Map<String, DescribeSObjectResult> entityFieldDescribesMap = new HashMap<String, DescribeSObjectResult>();
 
     private final boolean enableRetries;
     private final int maxRetries;
@@ -232,10 +253,10 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
     @Override
     protected boolean connectPostLogin(ConnectorConfig cc) {
-        if (getClient() == null)
+        if (getConnection() == null)
             throw new IllegalStateException("Client should be logged in already");
 
-        getClient().setCallOptions(ClientBase.getClientName(this.config), null);
+        getConnection().setCallOptions(ClientBase.getClientName(this.config), null);
         // query header
         int querySize;
         try {
@@ -244,7 +265,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
             querySize = Config.DEFAULT_EXTRACT_REQUEST_SIZE;
         }
         if (querySize > 0) {
-            getClient().setQueryOptions(querySize);
+            getConnection().setQueryOptions(querySize);
         }
 
         // assignment rule for update
@@ -253,14 +274,21 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
             if (rule.length() > 15) {
                 rule = rule.substring(0, 15);
             }
-            getClient().setAssignmentRuleHeader(rule, false);
+            getConnection().setAssignmentRuleHeader(rule, false);
         }
 
         // field truncation
-        getClient().setAllowFieldTruncationHeader(config.getBoolean(Config.TRUNCATE_FIELDS));
+        getConnection().setAllowFieldTruncationHeader(config.getBoolean(Config.TRUNCATE_FIELDS));
 
         // TODO: make this configurable
-        getClient().setDisableFeedTrackingHeader(true);
+        getConnection().setDisableFeedTrackingHeader(true);
+
+        getConnection().setDuplicateRuleHeader(
+            config.getBoolean(Config.DUPLICATE_RULE_ALLOW_SAVE),
+            config.getBoolean(Config.DUPLICATE_RULE_INCLUDE_RECORD_DETAILS),
+            config.getBoolean(Config.DUPLICATE_RULE_RUN_AS_CURRENT_USER)
+        );
+
         return true;
     }
 
@@ -292,7 +320,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
     /**
      * @param dynaBeans
      * @return SaveResult array
-     * @throws ConnectionException
+     * @throws ConnectionExceptio
      */
     public SaveResult[] loadInserts(List<DynaBean> dynaBeans) throws ConnectionException {
         return runSaveOperation(dynaBeans, INSERT_OPERATION, true);
@@ -346,11 +374,20 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
                 R result = op.run(arg);
                 if (result == null)
                     logger.info(Messages.getString("Client.resultNull")); //$NON-NLS-1$
+                this.getSession().performedSessionActivity(); // reset session activity timer
                 return result;
             } catch (ConnectionException ex) {
                 logger.error(
                         Messages.getFormattedString(
                                 "Client.operationError", new String[]{op.getName(), ex.getMessage()}), ex); //$NON-NLS-1$
+                if (ex instanceof ApiFault) {
+                    ApiFault fault = (ApiFault)ex;
+                    String faultMessage = fault.getExceptionMessage();
+                    logger.error(
+                            Messages.getFormattedString(
+                                    "Client.operationError", new String[]{op.getName(), faultMessage}), fault); //$NON-NLS-1$
+
+                }
                 // check retries
                 if (!checkConnectionException(ex, op.getName(), tryNum)) throw ex;
                 connectionException = ex;
@@ -384,6 +421,35 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         for (int j = 0; j < result.length; j++) {
             processResult(result[j].isSuccess(), "Client.itemDeleted", result[j].getId(), result[j].getErrors(), j);
+        }
+        return result;
+    }
+    
+    /**
+     * @param dynaBeans
+     * @return UndeleteResult array
+     * @throws ConnectionException
+     */
+    public UndeleteResult[] loadUndeletes(List<DynaBean> dynaBeans) throws ConnectionException {
+
+
+        DynaBean dynaBean;
+        String[] undels = new String[dynaBeans.size()];
+        for (int i = 0; i < dynaBeans.size(); i++) {
+            dynaBean = dynaBeans.get(i);
+            String id = (String) dynaBean.get("Id"); //$NON-NLS-1$
+            if (id == null) {
+                id = "";
+            }
+            undels[i] = id;
+        }
+        logger.debug(Messages.getString("Client.arraySize") + undels.length); //$NON-NLS-1$
+
+
+        UndeleteResult[] result = runOperation(UNDELETE_OPERATION, undels);
+
+        for (int j = 0; j < result.length; j++) {
+            processResult(result[j].isSuccess(), "Client.itemUndeleted", result[j].getId(), result[j].getErrors(), j);
         }
         return result;
     }
@@ -456,20 +522,36 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
     }
 
     @Override
-    public PartnerConnection getClient() {
-        return this.client;
+    public PartnerConnection getConnection() {
+        return this.connection;
     }
 
     public Map<String, DescribeGlobalSObjectResult> getDescribeGlobalResults() {
-        return describeGlobalResults;
+        if (this.describeGlobalResults == null || !config.getBoolean(Config.CACHE_DESCRIBE_GLOBAL_RESULTS)) {
+            this.describeGlobalResultsMap.clear();
+            try {
+                this.describeGlobalResults = runOperation(DESCRIBE_GLOBAL_OPERATION, null);
+            } catch (ConnectionException e) {
+                logger.error("Failed to get description of sobjects", e.getMessage());
+                return null;
+            }
+        }
+        
+        if (this.describeGlobalResultsMap.isEmpty()) {
+            for (DescribeGlobalSObjectResult res : describeGlobalResults.getSobjects()) {
+                if (res != null) {
+                    if (res.getLabel().startsWith("__MISSING LABEL__")) {
+                        res.setLabel(res.getName());
+                    }
+                    this.describeGlobalResultsMap.put(res.getName(), res);
+                }
+            }
+        }
+        return describeGlobalResultsMap;
     }
 
-    Map<String, DescribeSObjectResult> getEntityDescribeMap() {
-        return this.entityDescribes;
-    }
-
-    DescribeGlobalResult getEntityTypes() {
-        return entityTypes;
+    private Map<String, DescribeSObjectResult> getCachedEntityDescribeMap() {
+        return this.entityFieldDescribesMap;
     }
 
     public DescribeSObjectResult getFieldTypes() {
@@ -481,8 +563,18 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
         }
     }
 
-    public Map<String, DescribeRefObject> getReferenceDescribes() {
-        return referenceDescribes;
+    public ReferenceEntitiesDescribeMap getReferenceDescribes() {
+        return referenceEntitiesDescribesMap;
+    }
+    
+    public LimitInfo getAPILimitInfo() {
+        LimitInfoHeader_element limitInfoElement = getConnection().getLimitInfoHeader();
+        for (LimitInfo info : limitInfoElement.getLimitInfo()) {
+            if ("API REQUESTS".equalsIgnoreCase(info.getType())) {
+                return info;
+            }
+        }
+        return null;
     }
 
     boolean isSessionValid() {
@@ -497,21 +589,63 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
     private boolean login() throws ConnectionException, ApiFault {
         disconnect();
+        try {
+            dologin();
+            logger.debug("able to successfully invoke server APIs of version " + apiVersionForTheSession);
+        } catch (UnexpectedErrorFault fault) {
+            if (fault.getExceptionCode() == ExceptionCode.UNSUPPORTED_API_VERSION) {
+                logger.error("Failed to successfully invoke server APIs of version " + apiVersionForTheSession);
+                apiVersionForTheSession = getPreviousAPIVersionInWSC();
+                login();
+            } else {
+                logger.error("Failed to get user info using manually configured session id", fault);
+                throw fault;
+            }
+        } catch (ConnectionException e) {
+            String authEndpoint = config.getString(Config.ENDPOINT);
+            logger.warn(Messages.getMessage(this.getClass(), "failedUsernamePasswordAuth", 
+                                            authEndpoint, Config.ENDPOINT, e.getMessage()));
+            if (authEndpoint.contains(Config.LIGHTNING_ENDPOINT_URL_PART_VAL)) {
+                authEndpoint = authEndpoint.replace(Config.LIGHTNING_ENDPOINT_URL_PART_VAL, Config.MYSF_ENDPOINT_URL_PART_VAL);
+                config.setValue(Config.ENDPOINT, authEndpoint);
+                logger.info(Messages.getMessage(this.getClass(), "retryUsernamePasswordAuth", authEndpoint, Config.ENDPOINT));
+                login();
+            } else if (!authEndpoint.equals(Config.DEFAULT_ENDPOINT_URL)) {
+                config.setValue(Config.ENDPOINT, Config.DEFAULT_ENDPOINT_URL);
+                logger.info(Messages.getMessage(this.getClass(), "retryUsernamePasswordAuth", Config.DEFAULT_ENDPOINT_URL, Config.ENDPOINT));
+                login();
+            } else {
+                logger.error("Failed to get user info using manually configured session id", e);
+                throw e;   
+            }
+        }
+        return true; // exception thrown if there is an issue with login
+    }
+    
+    private boolean dologin() throws ConnectionException, ApiFault {
         // Attempt the login giving the user feedback
         logger.info(Messages.getString("Client.sforceLogin")); //$NON-NLS-1$
         final ConnectorConfig cc = getLoginConnectorConfig();
-        final PartnerConnection conn = Connector.newConnection(cc);
+        boolean savedIsTraceMessage = cc.isTraceMessage();
+        cc.setTraceMessage(false);
+        PartnerConnection conn = Connector.newConnection(cc);
         // identify the client as dataloader
         conn.setCallOptions(ClientBase.getClientName(this.config), null);
 
         String oauthAccessToken = config.getString(Config.OAUTH_ACCESSTOKEN);
-        if (oauthAccessToken != null && oauthAccessToken.trim().length() > 0) {
-            setConfiguredSessionId(conn, oauthAccessToken);
-        } else if (config.getBoolean(Config.SFDC_INTERNAL) && config.getBoolean(Config.SFDC_INTERNAL_IS_SESSION_ID_LOGIN)) {
-            setConfiguredSessionId(conn, config.getString(Config.SFDC_INTERNAL_SESSION_ID));
-        } else {
-            setSessionRenewer(conn);
-            loginInternal(conn);
+        try {
+            if (oauthAccessToken != null && oauthAccessToken.trim().length() > 0) {
+                conn = setConfiguredSessionId(conn, oauthAccessToken, null);
+            } else if (config.getBoolean(Config.SFDC_INTERNAL) && config.getBoolean(Config.SFDC_INTERNAL_IS_SESSION_ID_LOGIN)) {
+                conn = setConfiguredSessionId(conn, config.getString(Config.SFDC_INTERNAL_SESSION_ID), null);
+            } else {
+                setSessionRenewer(conn);
+                loginInternal(conn);
+            }
+        } catch (Exception ex) {
+            throw ex;
+        } finally {
+            cc.setTraceMessage(savedIsTraceMessage);
         }
         return true;
 
@@ -527,20 +661,19 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
         });
     }
 
-    private void setConfiguredSessionId(final PartnerConnection conn, String sessionId) throws ConnectionException {
+    private PartnerConnection setConfiguredSessionId(PartnerConnection conn, String sessionId, GetUserInfoResult userInfo) throws ConnectionException {
         logger.info("Using manually configured session id to bypass login");
         conn.setSessionHeader(sessionId);
-        try {
-            conn.getUserInfo(); // check to make sure we have a good connection
-        } catch (ConnectionException e) {
-            logger.error("Failed to get user info using manually configured session id", e);
-            throw e;
+        if (userInfo == null) {
+            userInfo = conn.getUserInfo(); // check to make sure we have a good connection
         }
-        loginSuccess(conn, getServerUrl(config.getString(Config.ENDPOINT)));
+        loginSuccess(conn, getServerUrl(config.getString(Config.ENDPOINT)), userInfo);
+        return conn;
     }
 
     private void loginInternal(final PartnerConnection conn) throws ConnectionException, PasswordExpiredException {
         final ConnectorConfig cc = conn.getConfig();
+        cc.setRequestHeader("client_id", config.getString(Config.OAUTH_CLIENTID));
         try {
             logger.info(Messages.getMessage(getClass(), "sforceLoginDetail", cc.getAuthEndpoint(), cc.getUsername()));
             LoginResult loginResult = runOperation(LOGIN_OPERATION, conn);
@@ -556,16 +689,16 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
             if (config.getBoolean(Config.RESET_URL_ON_LOGIN)) {
                 cc.setServiceEndpoint(serverUrl);
             }
-            loginSuccess(conn, server);
+            loginSuccess(conn, server, loginResult.getUserInfo());
         } catch (ConnectionException ex) {
             logger.error(Messages.getMessage(getClass(), "loginError", cc.getAuthEndpoint(), ex.getMessage()), ex);
             throw ex;
         }
     }
 
-    private void loginSuccess(PartnerConnection conn, String serv) {
-        this.client = conn;
-        setSession(conn.getSessionHeader().getSessionId(), serv);
+    private void loginSuccess(PartnerConnection conn, String serv, GetUserInfoResult userInfo) {
+        this.connection = conn;
+        setSession(conn.getSessionHeader().getSessionId(), serv, userInfo);
     }
 
     private String getServerStringFromUrl(URL url) {
@@ -587,8 +720,9 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
     public boolean logout() {
         try {
-            PartnerConnection pc = getClient();
+            PartnerConnection pc = getConnection();
             if (pc != null) pc.logout();
+            
         } catch (ConnectionException e) {
             // ignore
         } finally {
@@ -599,7 +733,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
     public void disconnect() {
         clearSession();
-        this.client = null;
+        this.connection = null;
     }
 
     /**
@@ -624,74 +758,62 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
     }
 
     /**
-     * Gets the sObject describes for all entities
-     */
-    public boolean setEntityDescribes() throws ConnectionException {
-        setEntityTypes();
-        if (this.describeGlobalResults.isEmpty()) {
-            for (DescribeGlobalSObjectResult res : entityTypes.getSobjects()) {
-                if (res != null) this.describeGlobalResults.put(res.getName(), res);
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Gets the available objects from the global describe
-     */
-    private void setEntityTypes() throws ConnectionException {
-        if (this.entityTypes == null)
-            this.entityTypes = runOperation(DESCRIBE_GLOBAL_OPERATION, null);
-    }
-
-    /**
      * Set the map of references to object external id info for current entity
      *
      * @throws ConnectionException
      */
     public void setFieldReferenceDescribes() throws ConnectionException {
-        referenceDescribes.clear();
-        if (getDescribeGlobalResults().isEmpty()) {
-            setEntityDescribes();
-        }
+        referenceEntitiesDescribesMap.clear();
         if (getFieldTypes() == null) {
             setFieldTypes();
         }
         if (getDescribeGlobalResults() != null) {
             Field[] entityFields = getFieldTypes().getFields();
-            for (Field entityField : entityFields) {
+
+            for (Field childObjectField : entityFields) {
                 // upsert on references (aka foreign keys) is supported only
                 // 1. When field has relationship is set and refers to exactly one object
                 // 2. When field is either createable or updateable. If neither is true, upsert will never work for that
                 // relationship.
-                if (entityField.isCreateable() || entityField.isUpdateable()) {
-                    String relationshipName = entityField.getRelationshipName();
-                    String[] referenceTos = entityField.getReferenceTo();
-                    if (referenceTos != null && referenceTos.length == 1 && referenceTos[0] != null
-                            && relationshipName != null && relationshipName.length() > 0
-                            && (entityField.isCreateable() || entityField.isUpdateable())) {
-
-                        String refEntityName = referenceTos[0];
-
-                        // make sure that the object is legal to upsert
-                        Field[] refObjectFields = describeSObject(refEntityName).getFields();
-                        Map<String, Field> refFieldInfo = new HashMap<String, Field>();
-                        for (Field refField : refObjectFields) {
-                            if (refField.isExternalId()) {
-                                refField.setCreateable(entityField.isCreateable());
-                                refField.setUpdateable(entityField.isUpdateable());
-                                refFieldInfo.put(refField.getName(), refField);
-                            }
-                        }
-                        if (!refFieldInfo.isEmpty()) {
-                            DescribeRefObject describe = new DescribeRefObject(refEntityName, refFieldInfo);
-                            referenceDescribes.put(relationshipName, describe);
-                        }
-                    }
+                String[] parentObjectNames = childObjectField.getReferenceTo();
+                String relationshipName = childObjectField.getRelationshipName();
+                if (parentObjectNames == null || parentObjectNames.length == 0 || parentObjectNames[0] == null
+                    || relationshipName == null || relationshipName.length() == 0
+                    || (!childObjectField.isCreateable() && !childObjectField.isUpdateable())) {
+                    // parent-child relationship either does not exist or
+                    // it is neither modifiable nor updateable.
+                    continue;
                 }
+                processParentObjectArrayForLookupReferences(parentObjectNames, childObjectField);
             }
         }
+    }
+    
+    private void processParentObjectArrayForLookupReferences(String[] parentObjectNames, Field childObjectField) throws ConnectionException {
+        for (int parentObjectIndex = 0; parentObjectIndex < parentObjectNames.length; parentObjectIndex++ ) {
+            String parentObjectName = parentObjectNames[parentObjectIndex];
+            processParentObjectForLookupReferences(parentObjectName, childObjectField, parentObjectIndex, parentObjectNames.length);
+        }
+    }
+    
+    private void processParentObjectForLookupReferences(String parentObjectName, Field childObjectField, int parentObjectIndex, int numParentTypes) throws ConnectionException {
+        Field[] parentObjectFields = describeSObject(parentObjectName).getFields();
+        Map<String, Field> parentIdLookupFieldMap = new HashMap<String, Field>();
+        for (Field parentField : parentObjectFields) {
+            processParentFieldForLookupReference(parentField, childObjectField, numParentTypes, parentObjectIndex, numParentTypes, parentIdLookupFieldMap);
+        }
+        if (!parentIdLookupFieldMap.isEmpty()) {
+            DescribeRefObject describeRelationship = new DescribeRefObject(parentObjectName, childObjectField, parentIdLookupFieldMap);
+            referenceEntitiesDescribesMap.put(childObjectField.getRelationshipName(), describeRelationship);
+        }
+    }
+    
+    private void processParentFieldForLookupReference(Field parentField, Field childObjectField, int numParentTypes, int parentObjectIndex, int totalParentObjects, Map<String, Field> parentIdLookupFieldMap) {
+        if (!parentField.isIdLookup()) {
+            return;
+        }
+        parentIdLookupFieldMap.put(parentField.getName(), parentField);
+
     }
 
     /**
@@ -715,18 +837,23 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
     }
 
     @Override
-    protected ConnectorConfig getConnectorConfig() {
+    public ConnectorConfig getConnectorConfig() {
         ConnectorConfig cc = super.getConnectorConfig();
         cc.setManualLogin(true);
         return cc;
     }
+    
+    public static String getServicePath() {
+        // Auth endpoint is a SOAP service
+        return ClientBase.getServicePathWithAPIVersion(DEFAULT_AUTH_ENDPOINT_URL.getPath());
+    }
 
-    private ConnectorConfig getLoginConnectorConfig() {
-        ConnectorConfig cc = getConnectorConfig();
+    private synchronized ConnectorConfig getLoginConnectorConfig() {
+        this.connectorConfig = getConnectorConfig();
         String serverUrl = getDefaultServer();
-        cc.setAuthEndpoint(serverUrl + DEFAULT_AUTH_ENDPOINT_URL.getPath());
-        cc.setServiceEndpoint(serverUrl + DEFAULT_AUTH_ENDPOINT_URL.getPath());
-        return cc;
+        this.connectorConfig.setAuthEndpoint(serverUrl + getServicePath());
+        this.connectorConfig.setServiceEndpoint(serverUrl + getServicePath());
+        return this.connectorConfig;
     }
 
     private String getDefaultServer() {
@@ -746,11 +873,14 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
      */
 
     public DescribeSObjectResult describeSObject(String entity) throws ConnectionException {
-        DescribeSObjectResult result = getEntityDescribeMap().get(entity);
+        DescribeSObjectResult result = null;
+        if (config.getBoolean(Config.CACHE_DESCRIBE_GLOBAL_RESULTS)) {
+            result = getCachedEntityDescribeMap().get(entity);
+        }
         if (result == null) {
             result = runOperation(DESCRIBE_SOBJECT_OPERATION, entity);
             if (result != null) {
-                getEntityDescribeMap().put(result.getName(), result);
+                getCachedEntityDescribeMap().put(result.getName(), result);
             }
         }
         return result;
@@ -777,36 +907,46 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
     private final Map<String, Field> fieldsByName = new HashMap<String, Field>();
 
-    public Field getField(String apiName) {
-        apiName = apiName.toLowerCase();
-        Field field = this.fieldsByName.get(apiName);
+    public Field getField(String sObjectFieldName) {
+        Field field = this.fieldsByName.get(sObjectFieldName);
         if (field == null) {
-            field = lookupField(apiName);
-            this.fieldsByName.put(apiName, field);
+            field = lookupField(sObjectFieldName);
+            this.fieldsByName.put(sObjectFieldName, field);
         }
         return field;
     }
 
-    private Field lookupField(String apiName) {
+    private Field lookupField(String sObjectFieldName) {
+        ParentIdLookupFieldFormatter parentLookupFieldFormatter = null;
+        try {
+            parentLookupFieldFormatter = new ParentIdLookupFieldFormatter(sObjectFieldName);
+        } catch (RelationshipFormatException ex) {
+            // ignore
+        }
         // look for field on target object
         for (Field f : getFieldTypes().getFields()) {
-            if (apiName.equals(f.getName().toLowerCase()) || apiName.equals(f.getLabel().toLowerCase()))
+            if (sObjectFieldName.equalsIgnoreCase(f.getName()) || sObjectFieldName.equalsIgnoreCase(f.getLabel())) {
                 return f;
-        }
-        // look for reference field on target object
-        if (apiName.contains(":")) {
-            Map<String, DescribeRefObject> refs = getReferenceDescribes();
-            for (Map.Entry<String, DescribeRefObject> ent : refs.entrySet()) {
-                String relName = ent.getKey().toLowerCase();
-                if (apiName.startsWith(relName)) {
-                    for (Map.Entry<String, Field> refEntry : ent.getValue().getFieldInfoMap().entrySet()) {
-                        String thisRefName = relName + ":" + refEntry.getKey().toLowerCase();
-                        if (apiName.equals(thisRefName)) return refEntry.getValue();
-                    }
+            }
+            if (parentLookupFieldFormatter != null) {
+                if (!parentLookupFieldFormatter.getParent().getRelationshipName().equalsIgnoreCase(f.getRelationshipName())) {
+                    continue;
                 }
+                Field parentField = this.referenceEntitiesDescribesMap.getParentField(sObjectFieldName);
+                if (parentField != null) {
+                    return parentField;
+                }
+                // need to add the relationship mapping to referenceEntitiesDescribesMap
+                try {
+                    processParentObjectForLookupReferences(parentLookupFieldFormatter.getParent().getParentObjectName(), f, 0, 1);
+                } catch (ConnectionException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+                return this.referenceEntitiesDescribesMap.getParentField(sObjectFieldName);
             }
         }
-        return null;
+        return this.referenceEntitiesDescribesMap.getParentField(sObjectFieldName);
     }
 
 }

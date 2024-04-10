@@ -25,8 +25,8 @@
  */
 package com.salesforce.dataloader.ui;
 
-import org.eclipse.jface.resource.ImageDescriptor;
-import org.eclipse.jface.wizard.WizardPage;
+import com.salesforce.dataloader.config.Config;
+import com.salesforce.dataloader.controller.Controller;
 
 /**
  * This is the base class for the LoadWizard ui pages. Allows navigation to be done dynamically by forcing setupPage to
@@ -35,7 +35,7 @@ import org.eclipse.jface.wizard.WizardPage;
  * @author Alex Warshavsky
  * @since 8.0
  */
-public abstract class LoadPage extends WizardPage {
+public abstract class LoadPage extends OperationPage {
 
     /**
      * @param pageName
@@ -43,11 +43,22 @@ public abstract class LoadPage extends WizardPage {
      * @param titleImage
      * 
      */
-    public LoadPage(String pageName, String title, ImageDescriptor titleImage) {
-        super(pageName, title, titleImage);
-    }
 
-    abstract boolean setupPage();
+
+    public LoadPage(String name, Controller controller) {
+        super(name, controller);
+    }
+    
+    @Override
+    protected String getConfigInfo() {
+        return Labels.getString("AdvancedSettingsDialog.batchSize")
+        + " "
+        + controller.getConfig().getLoadBatchSize()
+        + "    "
+        + Labels.getString("AdvancedSettingsDialog.startRow")
+        + " "
+        + controller.getConfig().getString(Config.LOAD_ROW_TO_START_AT); //$NON-NLS-1$
+    }
 
     /*
      * Common code for getting the next page
@@ -55,18 +66,10 @@ public abstract class LoadPage extends WizardPage {
     @Override
     public LoadPage getNextPage() {
         LoadPage nextPage = (LoadPage)super.getNextPage();
-        if(nextPage != null && nextPage.setupPage()) {
+        if( nextPage != null && nextPage.setupPage()) {
             return nextPage;
         } else {
             return this;
         }
-    }
-
-    /**
-     * Need to subclass this function to prevent the getNextPage() function being called before the button is clicked.
-     */
-    @Override
-    public boolean canFlipToNextPage() {
-        return isPageComplete();
     }
 }

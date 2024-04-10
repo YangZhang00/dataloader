@@ -33,6 +33,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
 import org.eclipse.jface.dialogs.ProgressMonitorDialog;
+import org.eclipse.jface.wizard.WizardPage;
 import org.eclipse.swt.SWT;
 
 import com.salesforce.dataloader.action.OperationInfo;
@@ -59,12 +60,12 @@ public class ExtractionWizard extends BaseWizard {
     }
 
     @Override
-    protected ExtractionPage setPages() {
+    protected WizardPage setPages() {
         final Controller controller = getController();
         addPage(new ExtractionDataSelectionPage(controller ));
         ExtractionPage soqlPage = new ExtractionSOQLPage(controller);
         addPage(soqlPage);
-        ExtractionPage finishPage = soqlPage;
+        WizardPage finishPage = soqlPage;
         if (getConfig().getBoolean(Config.ENABLE_EXTRACT_STATUS_OUTPUT)) {
             //need to reference the finish page for performFinish()
             finishPage = new ExtractionFinishPage(controller);
@@ -74,8 +75,8 @@ public class ExtractionWizard extends BaseWizard {
     }
 
     @Override
-    protected ExtractionPage getFinishPage() {
-        return (ExtractionPage)super.getFinishPage();
+    protected OperationPage getFinishPage() {
+        return (OperationPage)super.getFinishPage();
     }
 
     private boolean validateExtractionPath(String filePath) {
@@ -124,7 +125,7 @@ public class ExtractionWizard extends BaseWizard {
             return false;
         }
 
-        if (!getFinishPage().finishPage()) {
+        if (!getFinishPage().finishAllowed()) {
             return false;
         }
 
@@ -148,11 +149,13 @@ public class ExtractionWizard extends BaseWizard {
             return false;
         }
 
-        return true;
+        return getController().isLastOperationSuccessful() && closeWizardPagePostSuccessfulFinish();
     }
 
     @Override
-    protected SettingsPage createSettingsPage() {
-        return new ExtractionSettingsPage(getController());
+    protected LoginPage createLoginPage() {
+        LoginPage loginPage = new LoginPage(getController());
+        loginPage.setNextPageName(ExtractionDataSelectionPage.class.getSimpleName());
+        return loginPage;
     }
 }

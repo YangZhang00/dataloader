@@ -27,7 +27,6 @@ package com.salesforce.dataloader.ui;
 
 import org.eclipse.jface.wizard.Wizard;
 import org.eclipse.jface.wizard.WizardPage;
-import org.eclipse.swt.graphics.Image;
 
 import com.salesforce.dataloader.action.OperationInfo;
 import com.salesforce.dataloader.config.Config;
@@ -44,16 +43,16 @@ public abstract class BaseWizard extends Wizard {
         getConfig().setValue(Config.OPERATION, info.name());
         this.finishPage = setupPages();
         // Set the dialog window title
-        setWindowTitle(getLabel("title"));
+        setWindowTitle(getLabel("windowTitle"));
 
     }
 
-    protected abstract SettingsPage createSettingsPage();
+    protected abstract LoginPage createLoginPage();
 
     protected abstract WizardPage setPages();
 
     private WizardPage setupPages() {
-        if (SettingsPage.isNeeded(getController())) addPage(createSettingsPage());
+        if (LoginPage.isNeeded(getController())) addPage(createLoginPage());
 
         return setPages();
     }
@@ -76,6 +75,10 @@ public abstract class BaseWizard extends Wizard {
 
     protected WizardPage getFinishPage() {
         return finishPage;
+    }
+    
+    protected boolean closeWizardPagePostSuccessfulFinish() {
+        return getConfig().getBoolean(Config.WIZARD_CLOSE_ON_FINISH);
     }
 
 }

@@ -4,33 +4,26 @@
   <groupId>com.force</groupId>
   <artifactId>dataloader</artifactId>
   <packaging>jar</packaging>
-  <version>51.0.1</version>
-  <name>Data Loader</name>
+  <version>60.0.2</version>
+  <name>Salesforce Data Loader</name>
   <url>https://github.com/forcedotcom/dataloader</url>
   <organization>
-    <name>salesforce.com</name>
+    <name>Salesforce, Inc.</name>
     <url>http://salesforce.com</url>
   </organization>
 
   <properties>
-    <short.version>51</short.version>
-    <force.wsc.version>51.0.0</force.wsc.version>
-    <force.partner.api.version>${force.wsc.version}</force.partner.api.version>
-    <build.year>2021</build.year>
-    <java.compile.version>11</java.compile.version>
-    <minJvmVersion>1.11.0</minJvmVersion>
-    <codesign>DONTSIGN</codesign>
-    <spring.version>5.2.7.RELEASE</spring.version>
+    <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <config.additional.properties></config.additional.properties>
-    <jarsigner.skip>true</jarsigner.skip>
 
     <!-- test properties -->
     <test.endpoint>http://testendpoint</test.endpoint>
     <test.user.default>admin@org.com</test.user.default>
     <test.user.restricted>standard@org.com</test.user.restricted>
     <test.password></test.password><!-- use the encrypted password -->
+    <test.encryptionFile></test.encryptionFile>
     <test.redirect>false</test.redirect>
+    <test.testfiles.directory>${project.build.testOutputDirectory}/testfiles</test.testfiles.directory>
   </properties>
 
   <repositories>
@@ -42,106 +35,127 @@
     </repository>
     <repository>
       <id>maven-eclipse-repo</id>
-      <url>http://maven-eclipse.github.io/maven</url>
+      <url>https://maven-eclipse.github.io/maven</url>
     </repository>
   </repositories>
 
   <dependencies>
+<!-- Runtime dependencies -->
+<!-- 
+     SWT - OS and processor architecture are not important at compile time, using mac for OS 
+     and ARM for processor architecture for compile-time dependency
+ -->
+    <dependency>
+      <groupId>local.swt</groupId>
+      <artifactId>swtmac_aarch64</artifactId>
+      <version>4.30</version>
+    </dependency>
+<!-- https://mvnrepository.com/artifact/com.google.code.gson/gson -->
     <dependency>
       <groupId>com.google.code.gson</groupId>
       <artifactId>gson</artifactId>
-      <version>2.8.5</version>
+      <version>2.10.1</version>
     </dependency>
-    <dependency>
-      <groupId>com.force.api</groupId>
-      <artifactId>force-wsc</artifactId>
-      <version>${force.wsc.version}</version>
-    </dependency>
+<!-- https://mvnrepository.com/artifact/com.force.api/force-partner-api -->
     <dependency>
       <groupId>com.force.api</groupId>
       <artifactId>force-partner-api</artifactId>
-      <version>${force.partner.api.version}</version>
+      <version>60.1.1</version>
+      <exclusions>
+        <exclusion>
+            <groupId>commons-logging</groupId>
+            <artifactId>commons-logging</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
+<!-- https://mvnrepository.com/artifact/org.apache.commons/commons-dbcp2 -->
     <dependency>
-      <groupId>commons-dbcp</groupId>
-      <artifactId>commons-dbcp</artifactId>
-      <version>1.4</version>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-dbcp2</artifactId>
+      <version>2.12.0</version>
+      <exclusions>
+      	<exclusion>
+      		<groupId>commons-logging</groupId>
+      		<artifactId>commons-logging</artifactId>
+      	</exclusion>
+      </exclusions>
     </dependency>
+<!-- https://mvnrepository.com/artifact/commons-io/commons-io -->
     <dependency>
       <groupId>commons-io</groupId>
       <artifactId>commons-io</artifactId>
-      <version>2.8.0</version>
+      <version>2.16.1</version>
     </dependency>
-
-<!-- https://mvnrepository.com/artifact/org.apache.logging.log4j/log4j-api -->
-    <dependency>
-      <groupId>org.apache.logging.log4j</groupId>
-      <artifactId>log4j-api</artifactId>
-      <version>2.14.0</version>
-    </dependency>
-
 <!-- https://mvnrepository.com/artifact/org.apache.logging.log4j/log4j-core -->
     <dependency>
       <groupId>org.apache.logging.log4j</groupId>
       <artifactId>log4j-core</artifactId>
-      <version>2.14.0</version>
+      <version>2.23.1</version>
     </dependency>
+<!-- https://mvnrepository.com/artifact/org.apache.httpcomponents/httpclient -->
     <dependency>
       <groupId>org.apache.httpcomponents</groupId>
       <artifactId>httpclient</artifactId>
-      <version>4.5.13</version>
+      <version>4.5.14</version>
+      <exclusions>
+      	<exclusion>
+   	  <groupId>commons-logging</groupId>
+      	  <artifactId>commons-logging</artifactId>
+      	</exclusion>
+      </exclusions>
     </dependency>
-
+<!-- https://mvnrepository.com/artifact/org.springframework/spring-context -->
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-context</artifactId>
-      <version>${spring.version}</version>
+      <version>6.1.5</version>
     </dependency>
-    <dependency>
-      <groupId>org.springframework</groupId>
-      <artifactId>spring-expression</artifactId>
-      <version>${spring.version}</version>
-    </dependency>
-    
-    <dependency>
-      <groupId>org.quartz-scheduler</groupId>
-      <artifactId>quartz</artifactId>
-      <version>2.3.2</version>
-    </dependency>
+<!-- https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.jface --> 
     <dependency>
       <groupId>org.eclipse.platform</groupId>
       <artifactId>org.eclipse.jface</artifactId>
-      <version>3.22.0</version>
+      <version>3.33.0</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.eclipse.platform</groupId>
+          <artifactId>org.eclipse.swt</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
+<!-- https://mvnrepository.com/artifact/org.apache.commons/commons-text -->
+    <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-text</artifactId>
+        <version>1.11.0</version>
+    </dependency>
+
 <!-- Testing dependencies -->
+<!-- https://mvnrepository.com/artifact/com.h2database/h2 -->
     <dependency>
       <groupId>com.h2database</groupId>
       <artifactId>h2</artifactId>
-      <version>1.4.197</version>
+      <version>2.2.224</version>
       <scope>test</scope>
     </dependency>
+<!-- https://mvnrepository.com/artifact/junit/junit -->
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
-      <version>4.13.1</version>
+      <version>4.13.2</version>
       <scope>test</scope>
     </dependency>
+<!-- https://mvnrepository.com/artifact/org.springframework/spring-jdbc -->
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-jdbc</artifactId>
-      <version>${spring.version}</version>
+      <version>6.1.5</version>
       <scope>test</scope>
     </dependency>
-    <dependency>
-      <groupId>org.testng</groupId>
-      <artifactId>testng</artifactId>
-      <version>7.3.0</version>
-      <scope>test</scope>
-    </dependency>
+<!-- https://mvnrepository.com/artifact/org.mockito/mockito-core -->
     <dependency>
       <groupId>org.mockito</groupId>
-      <artifactId>mockito-all</artifactId>
-      <version>2.0.2-beta</version>
+      <artifactId>mockito-core</artifactId>
+      <version>5.11.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -156,19 +170,22 @@
         <includes>
           <include>**/*.properties</include>
         </includes>
+        <excludes>
+          <exclude>**/*.swp</exclude>
+          <exclude>**/*.*~*</exclude>
+        </excludes>
       </resource>
       <resource>
         <directory>src/main/resources</directory>
         <filtering>false</filtering>
         <excludes>
           <exclude>**/*.properties</exclude>
+          <exclude>**/*.swp</exclude>
+          <exclude>**/*.*~*</exclude>
         </excludes>
       </resource>
     </resources>
 
-    <filters>
-      <filter>src/test/resources/testfilter.properties</filter>
-    </filters>
     <testResources>
       <testResource>
         <directory>src/test/resources</directory>
@@ -176,26 +193,79 @@
       </testResource>
     </testResources>
 
-    <pluginManagement>
-      <plugins>
-        <plugin>
-          <groupId>org.codehaus.mojo</groupId>
-          <artifactId>osxappbundle-maven-plugin</artifactId>
-          <version>1.2.0</version>
-        </plugin>
-        <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-shade-plugin</artifactId>
-          <version>3.2.1</version>
-        </plugin>
-      </plugins>
-    </pluginManagement>
-
     <plugins>
+<!-- https://mvnrepository.com/artifact/org.codehaus.mojo/versions-maven-plugin -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>versions-maven-plugin</artifactId>
+        <version>2.16.2</version>
+      </plugin>
+<!-- plugins inherited from parent whose version needs to be specified
+     to clear mvn versions:display-plugin-updates
+ -->
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-clean-plugin -->
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-clean-plugin</artifactId>
+      <version>3.3.2</version>
+    </plugin>
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-deploy-plugin -->
+	<plugin>
+	  <groupId>org.apache.maven.plugins</groupId>
+	  <artifactId>maven-deploy-plugin</artifactId>
+	  <version>3.1.1</version>
+	</plugin>
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-install-plugin -->
+	<plugin>
+	  <groupId>org.apache.maven.plugins</groupId>
+	  <artifactId>maven-install-plugin</artifactId>
+	  <version>3.1.1</version>
+	</plugin>
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-jar-plugin -->
+	<plugin>
+	  <groupId>org.apache.maven.plugins</groupId>
+	  <artifactId>maven-jar-plugin</artifactId>
+      <version>3.3.0</version>
+      <configuration>
+          <excludes>
+            <exclude>contrib/**</exclude>
+          </excludes>
+      </configuration>
+	</plugin>
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-site-plugin -->
+	<plugin>
+	  <groupId>org.apache.maven.plugins</groupId>
+	  <artifactId>maven-site-plugin</artifactId>
+	  <version>3.12.1</version>
+	</plugin>
+
+<!-- plugins explicitly included in the project -->
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-enforcer-plugin -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <version>3.4.1</version>
+        <executions>
+          <execution>
+            <id>enforce-maven</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <requireMavenVersion>
+                  <version>3.6</version>
+                </requireMavenVersion>
+              </rules>    
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-resources-plugin -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-resources-plugin</artifactId>
-        <version>3.1.0</version>
+        <version>3.3.1</version>
         <configuration>
             <useDefaultDelimiters>false</useDefaultDelimiters>
             <delimiters>
@@ -207,139 +277,40 @@
               <nonFilteredFileExtension>jpeg</nonFilteredFileExtension>
               <nonFilteredFileExtension>jpg</nonFilteredFileExtension>
               <nonFilteredFileExtension>png</nonFilteredFileExtension>
+              <nonFilteredFileExtension>csv</nonFilteredFileExtension>
             </nonFilteredFileExtensions>
         </configuration>
       </plugin>
-	
-      <!-- we might want to use the maven-shade-plugin in the future instead 
-        of maven-assembly-plugin -->
-      <plugin>
-        <artifactId>maven-assembly-plugin</artifactId>
-        <configuration>
-          <archive>
-            <manifest>
-              <mainClass>com.salesforce.dataloader.process.DataLoaderRunner</mainClass>
-            </manifest>
-          </archive>
-          <descriptors>
-            <descriptor>src/main/assembly/uber.xml</descriptor>
-          </descriptors>
-        </configuration>
-        <executions>
-          <execution>
-            <id>make-uber-jar</id>
-            <phase>package</phase>
-            <goals>
-              <goal>single</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
-      <plugin>
-        <artifactId>maven-shade-plugin</artifactId>
-        <executions>
-          <execution>
-            <phase>package</phase>
-            <goals>
-              <goal>shade</goal>
-            </goals>
-            <configuration>
-              <shadedArtifactAttached>true</shadedArtifactAttached>
-              <shadedClassifierName>shade</shadedClassifierName> <!-- Any name that makes sense -->
-              <filters>
-                <filter>
-                  <artifact>*:*</artifact>
-                  <excludes>
-                    <exclude>META-INF/*.SF</exclude>
-                    <exclude>META-INF/*.DSA</exclude>
-                    <exclude>META-INF/*.RSA</exclude>
-                  </excludes>
-                </filter>
-              </filters>
-              <transformers>
-                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                  <mainClass>com.salesforce.dataloader.process.DataLoaderRunner</mainClass>
-                </transformer>
-                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
-                  <resource>META-INF/spring.handlers</resource>
-                </transformer>
-                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
-                  <resource>META-INF/spring.schemas</resource>
-                </transformer>
-                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
-                  <resource>META-INF/spring.tooling</resource>
-                </transformer>
-              </transformers>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
-
+        
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-compiler-plugin -->
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
-        <version>3.8.1</version>
+        <version>3.13.0</version>
         <configuration>
-          <source>${java.compile.version}</source>
-          <target>${java.compile.version}</target>
+          <forceJavacCompilerUse>true</forceJavacCompilerUse>
+          <compilerArgs>
+            <!-- <arg>-verbose</arg> -->
+          </compilerArgs>
         </configuration>
       </plugin>
 
+<!-- https://mvnrepository.com/artifact/com.mycila/license-maven-plugin -->
       <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-        <version>2.22.1</version>
-          <dependencies>
-              <dependency>
-                  <groupId>org.apache.maven.surefire</groupId>
-                  <artifactId>surefire-junit4</artifactId>
-                  <version>3.0.0-M2</version>
-              </dependency>
-          </dependencies>
-        <configuration>
-          <excludes>
-            <!-- CORE UNIT TESTS: revise to keep this list fast and connectivity free -->
-            <exclude>**/client/**</exclude>
-            <exclude>**/dyna/SObjectReferenceConverterTest.*</exclude>
-            <exclude>**/integration/**</exclude>
-            <exclude>**/mapping/LoadMapperTest.*</exclude>
-            <exclude>**/mapping/SOQLMapperTest.*</exclude>
-            <exclude>**/process/**</exclude>
-          </excludes>
-        </configuration>
-      </plugin>
-
-      <plugin>
-          <groupId>com.mycila.maven-license-plugin</groupId>
-          <artifactId>maven-license-plugin</artifactId>
-          <version>1.8.0</version>
+          <groupId>com.mycila</groupId>
+          <artifactId>license-maven-plugin</artifactId>
+          <version>4.3</version>
           <configuration>
+            <licenseSets>
+              <licenseSet>
               <header>license.txt</header>
-              <excludes>
-                  <exclude>**/*.bat</exclude>
-                  <exclude>**/*.html</exclude>
-                  <exclude>**/*.txt</exclude>
-                  <exclude>**/*.xml</exclude>
-                  <exclude>**/*.md</exclude>
-                  <exclude>**/*.nsi</exclude>
-                  <exclude>**/*.properties</exclude>
-                  <exclude>**/*.sh</exclude>
-                  <exclude>windows-dependencies/**</exclude>
-                  <exclude>local-proj-repo/**</exclude>
-                  <exclude>src/main/resources/**</exclude>
-                  <exclude>src/test/resources/**</exclude>
-                  <exclude>.gitignore</exclude>
-                  <exclude>.gitmodules</exclude>
-                  <exclude>**/*.csv</exclude>
-                  <exclude>**/*.rtf</exclude>
-                  <exclude>**/*.sdl</exclude>
-                  <exclude>**/*.log</exclude>
-                  <exclude>**/*.command</exclude>
-                  <exclude>**/*.jks</exclude>
-                  <exclude>release/**</exclude>
-                  <exclude>yoursway-create-dmg/**</exclude>
-                  <exclude>src/main/nsis/**</exclude>
-                  <exclude>configs/**</exclude>
-              </excludes>
+              <includes>
+                  <include>**/*.java</include>
+              </includes>
+                <properties>
+                  <strictChecking>true</strictChecking>
+                </properties>
+              </licenseSet>
+            </licenseSets>
           </configuration>
           <executions>
               <execution>
@@ -351,133 +322,212 @@
           </executions>
       </plugin>
       <plugin>
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-shade-plugin -->
         <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-jarsigner-plugin</artifactId>
-        <version>3.0.0</version>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration>
+          <createDependencyReducedPom>false</createDependencyReducedPom>
+          <artifactSet>
+            <excludes>
+                <exclude>local.swt:swt*:</exclude>
+           </excludes>
+          </artifactSet>
+          <transformers>
+            <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+              <mainClass>com.salesforce.dataloader.process.DataLoaderRunner</mainClass>
+              <manifestEntries>
+                <Main-Class>com.salesforce.dataloader.process.DataLoaderRunner</Main-Class>
+                <Multi-Release>true</Multi-Release>
+                <Permissions>all-permissions</Permissions>
+                <Application-Name>${project.name}</Application-Name>
+              </manifestEntries>
+            </transformer>
+          </transformers>
+          <minimizeJar>true</minimizeJar>
+          <filters>
+            <filter>
+              <artifact>com.force.api:force-partner-api</artifact>
+              <includes>
+                <include>**</include>
+              </includes>
+            </filter>
+            <filter>
+               <artifact>org.apache.logging.log4j:log4j-core</artifact>
+               <includes>
+                   <include>**</include>
+               </includes>
+            </filter>
+             <filter>
+               <artifact>org.apache.logging.log4j:log4j-api</artifact>
+               <includes>
+                   <include>**</include>
+               </includes>
+            </filter>
+            <filter>
+               <artifact>org.springframework:spring-beans</artifact>
+               <includes>
+                   <include>**</include>
+               </includes>
+            </filter>
+            <filter>
+                <artifact>*:*</artifact>
+                <excludes>
+                    <exclude>**/Log4j2Plugins.dat</exclude>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>META-INF/license.txt</exclude>
+                    <exclude>META-INF/LICENSE.txt</exclude>
+                    <exclude>META-INF/notice.txt</exclude>
+                    <exclude>META-INF/NOTICE.txt</exclude>
+               </excludes>
+            </filter>
+          </filters>
+        </configuration>
         <executions>
           <execution>
-            <id>sign</id>
+            <id>make-shaded-jar</id>
+            <phase>package</phase>
             <goals>
-              <goal>sign</goal>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-antrun-plugin -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <phase>compile</phase>
+            <configuration>
+              <target>
+                <copy todir="${basedir}/target/classes/mac/" flatten="true">
+                  <fileset dir="${basedir}/local-proj-repo/local/swt/" includes="swtmac*/*/*.jar"/>
+                </copy>
+                <copy todir="${basedir}/target/classes/win/"  flatten="true">
+                  <fileset dir="${basedir}/local-proj-repo/local/swt/" includes="swtwin*/*/*.jar"/>
+                </copy>
+                <copy todir="${basedir}/target/classes/linux/"  flatten="true">
+                  <fileset dir="${basedir}/local-proj-repo/local/swt/" includes="swtlinux*/*/*.jar"/>
+                </copy>
+
+                <mkdir dir="${basedir}/target/zipartifacts"/>
+                <copy file="${basedir}/release/install/install.command" 
+                    todir="${basedir}/target/zipartifacts"/>
+                <copy file="${basedir}/release/install/install.command" 
+                    tofile="${basedir}/target/zipartifacts/install.bat"/>
+                <copy file="${basedir}/target/classes/mac/util/util.sh"
+                    todir="${basedir}/target/zipartifacts/util"/>
+                <copy file="${basedir}/target/classes/win/util/util.bat" 
+                    todir="${basedir}/target/zipartifacts/util"/>
+
+                <mkdir dir="${basedir}/target/classes/linux"/>
+                <copy file="${basedir}/target/classes/mac/dataloader_console"
+                    tofile="${basedir}/target/classes/linux/dataloader.sh"/>
+                <copy file="${basedir}/target/classes/mac/util/util.sh"
+                    todir="${basedir}/target/classes/linux/util"/>
+
+                <replace dir="${basedir}/target/" token="@@FULL_VERSION@@" value="${project.version}"/>
+                <replace dir="${basedir}/target/" token="@@MIN_JAVA_VERSION@@" value="${maven.compiler.release}"/>
+
+                <fixcrlf srcdir="${basedir}/target/"
+                            includes="**/*.bat" eol="crlf"/>
+                <fixcrlf srcdir="${basedir}/target/"
+                            includes="**/*.command" eol="crlf" eof="remove"/>
+                <fixcrlf srcdir="${basedir}/target/"
+                                    includes="**/*.sh" eol="lf" eof="remove"/>
+              </target>
+            </configuration>
+            <goals>
+              <goal>run</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>zip</id>
+            <phase>package</phase>
+             <configuration>
+              <target>
+                <delete file="${basedir}/dataloader_v${project.version}.zip"/>
+                <copy file="${basedir}/target/dataloader-${project.version}.jar" 
+                    todir="${basedir}/target/zipartifacts"/>
+                <zip update="true" destfile="${basedir}/dataloader_v${project.version}.zip">
+                  <zipfileset dirmode="755" filemode="755" 
+                    dir="${basedir}/target/zipartifacts" />
+                </zip>
+              </target>
+             </configuration>
+            <goals>
+              <goal>run</goal>
+            </goals>
+           </execution>
+          <execution>
+            <id>test-cleanup</id>
+            <phase>package</phase>
+            <configuration>
+              <target>
+                <delete dir="${basedir}/target/classes"/>
+              </target>
+            </configuration>
+            <goals>
+              <goal>run</goal>
             </goals>
           </execution>
         </executions>
+      </plugin>
+
+<!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-surefire-plugin -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
         <configuration>
-          <archive>target/dataloader-${project.version}-uber.jar</archive>
-          <skip>${jarsigner.skip}</skip>
+          <!-- skip unit and integration tests during maven's test phase -->
+          <skipTests>true</skipTests>
+          <additionalClasspathElements>
+            <additionalClasspathElement>${basedir}/target/dataloader-${project.version}.jar</additionalClasspathElement>
+          </additionalClasspathElements>
         </configuration>
+        <executions>
+          <!-- To run unit tests: mvn clean package -->
+          <!-- To run integration tests: mvn clean package -Pintegration-test to run integration tests -->
+          <execution>
+            <id>unit-tests</id>
+            <phase>package</phase>
+            <configuration>
+              <skipTests>false</skipTests>
+              <excludes>
+                <!-- skip integration tests -->
+                <exclude>**/client/**, **/dyna/SObjectReferenceConverterTest.*, **/integration/**, **/mapping/LoadMapperTest.*, **/mapping/SOQLMapperTest.*, **/process/** </exclude>
+              </excludes>
+            </configuration>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>integration-tests</id>
+            <phase>verify</phase>
+            <configuration>
+              <skipTests>false</skipTests>
+              <excludes>
+                <exclude>
+                  <!-- Specify the list of integration tests to exclude -->
+                </exclude>
+              </excludes>
+            </configuration>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>
-
-  <profiles>
-    <profile>
-      <id>mac64</id>
-      <activation>
-        <os>
-          <family>mac</family>
-          <arch>x86_64</arch>
-        </os>
-      </activation>
-      <dependencies>
-        <dependency>
-          <groupId>local.swt</groupId>
-          <artifactId>swtmac</artifactId>
-          <version>4.18</version>
-        </dependency>
-      </dependencies>
-      <properties>
-          <OSType>mac</OSType>
-      </properties>
-    </profile>
-
-    <profile>
-      <id>win64</id>
-      <activation>
-        <os>
-          <family>Windows</family>
-          <arch>amd64</arch>
-        </os>
-      </activation>
-      <dependencies>
-        <dependency>
-          <groupId>local.swt</groupId>
-          <artifactId>swtwin</artifactId>
-          <version>4.18</version>
-        </dependency>
-      </dependencies>
-      <properties>
-          <OSType>win</OSType>
-      </properties>
-    </profile>
-    
-    <profile>
-      <id>zip</id>
-      <build>
-        <plugins>
-	      <plugin>
-	        <groupId>org.apache.maven.plugins</groupId>
-	        <artifactId>maven-antrun-plugin</artifactId>
-	        <version>1.8</version>
-	        <executions>
-	           <execution>
-	             <phase>package</phase>
-	             <goals>
-	               <goal>run</goal>
-	             </goals>
-	           </execution>
-	         </executions>
-	         <configuration>
-	           <tasks>      
-	             <echo>creating version-specific files for the target OS: ${OSType}</echo>
-	             <mkdir dir="${basedir}/target/${OSType}"/>
-	             <copydir src="${basedir}/release/${OSType}" dest="${basedir}/target/${OSType}"/>
-	             <replace dir="${basedir}/target/${OSType}/" token="@@FULL_VERSION@@" value="${version}"/>
-	             <replace dir="${basedir}/target/${OSType}/" token="@@SHORT_VERSION@@" value="${short.version}"/>
-	             <chmod file="${basedir}/target/${OSType}/*" perm="755" />
-	
-	             <echo>copying uber jar to OS-specific folder for the target OS: ${OSType}</echo>
-	             <copy file="${basedir}/target/dataloader-${version}-uber.jar" 
-	                   todir="${basedir}/target/${OSType}"/>
-	             
-	             <echo>zip OS-specific folder</echo>
-	             <zip update="true" destfile="${basedir}/target/${OSType}/dataloader_${OSType}.zip" >
-	               <zipfileset dirmode="755" filemode="755" 
-	                           dir="${basedir}/target/${OSType}" />
-	             </zip>
-	
-	            </tasks>
-	          </configuration>
-	      </plugin>
-        </plugins>
-      </build>
-    </profile>
-    
-    <profile>
-      <id>integration-test</id>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-surefire-plugin</artifactId>
-            <version>2.13</version>
-            <dependencies>
-              <dependency>
-                <groupId>org.apache.maven.surefire</groupId>
-                <artifactId>surefire-junit4</artifactId>
-                <version>2.13</version>
-              </dependency>
-            </dependencies>
-            <configuration>
-              <excludes>
-                <!-- INTEGRATION UNIT TESTS: revise to remove works in progress -->
-                <exclude>**/integration/**</exclude>
-              </excludes>
-            </configuration>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-  </profiles>
-
 </project>

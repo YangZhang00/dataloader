@@ -41,17 +41,22 @@ import org.apache.logging.log4j.LogManager;
 public class CSVColumnVisitor {
 
     private boolean first = true;
+    private boolean escapeFormulaValue = true;
 
     private static final char QUOTE = '"';
     private static final char COMMA = ',';
+    private static final char EQUAL = '=';
 
     private Writer writer;
+    private char columnDelimiter = COMMA;
 
     //logger
     private static Logger logger = LogManager.getLogger(CSVColumnVisitor.class);
 
-    public CSVColumnVisitor(Writer writer) {
+    public CSVColumnVisitor(Writer writer, boolean escapeFormulaValue, char columnDelimiter) {
         this.writer = writer;
+        this.escapeFormulaValue = escapeFormulaValue;
+        this.columnDelimiter = columnDelimiter;
     }
 
     public void newRow() {
@@ -65,7 +70,7 @@ public class CSVColumnVisitor {
         }
         try {
             if (!first)
-                writer.write(COMMA);
+                writer.write(this.columnDelimiter);
             else
                 first = false;
 
@@ -73,6 +78,9 @@ public class CSVColumnVisitor {
 
             for (int i = 0, len = column.length(); i < len; i++) {
                 char c = column.charAt(i);
+                if (this.escapeFormulaValue && i == 0 && c == EQUAL) {
+                    writer.write("'"); // escape the '=' character as the first char
+                }
                 if (c == QUOTE)
                     writer.write("\"\"");
                 else

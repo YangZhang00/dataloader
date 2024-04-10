@@ -26,10 +26,16 @@
 
 package com.salesforce.dataloader.process;
 
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import com.salesforce.dataloader.TestSetting;
+import com.salesforce.dataloader.TestVariant;
+
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Map;
 
 /**
@@ -38,8 +44,21 @@ import java.util.Map;
  * @author Aleksandr Shulman, Colin Jarvis
  * @since 21.0
  */
+@SuppressWarnings("unused")
 @RunWith(Parameterized.class)
 public class CsvExtractAllProcessTest extends ProcessExtractTestBase {
+
+    @Parameterized.Parameters(name = "{0}")
+    public static Collection<Object[]> getParameters() {
+        return Arrays.asList(
+                // partner API
+                TestVariant.forSettings(TestSetting.BULK_API_DISABLED, TestSetting.BULK_V2_API_DISABLED),
+                // Bulk API
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_V2_API_DISABLED)
+                // Bulk V2 Query API does not support query_all
+                // TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_V2_API_ENABLED)
+            );
+    }
 
     public CsvExtractAllProcessTest(Map<String, String> config) throws Exception {
         super(config);

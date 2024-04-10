@@ -26,8 +26,9 @@
 
 package com.salesforce.dataloader.ui;
 
-import java.io.IOException;
+import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -51,6 +52,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
 
+import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.dao.csv.CSVFileReader;
 import com.salesforce.dataloader.exception.DataAccessObjectException;
@@ -58,8 +60,8 @@ import com.salesforce.dataloader.exception.DataAccessObjectInitializationExcepti
 import com.salesforce.dataloader.model.Row;
 import com.salesforce.dataloader.ui.csvviewer.CSVContentProvider;
 import com.salesforce.dataloader.ui.csvviewer.CSVLabelProvider;
+import com.salesforce.dataloader.util.AppUtil;
 import com.salesforce.dataloader.util.DAORowUtil;
-import com.salesforce.dataloader.util.StreamGobbler;
 
 /**
  * This class creates the mapping dialog
@@ -69,17 +71,13 @@ public class CSVViewerDialog extends Dialog {
 
     private Logger logger = LogManager.getLogger(CSVViewerDialog.class);
     private String filename;
-    private boolean useCustomSplitter = false;
+    private final boolean ignoreDelimiterConfig;
+    private final boolean isQueryOperationResult;
     private int numberOfRows;
 
     //the two tableViewers
     private TableViewer csvTblViewer;
     private final Controller controller;
-
-    public void setUseCustomSplitter(boolean useCustomSplitter)
-    {
-        this.useCustomSplitter = useCustomSplitter;
-    }
 
     public void setFileName(String filename) {
         this.filename = filename;
@@ -91,23 +89,16 @@ public class CSVViewerDialog extends Dialog {
 
     /**
      * @param parent
-     */
-    public CSVViewerDialog(Shell parent, Controller controller) {
-        // Pass the default styles here
-        this(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.MAX | SWT.MIN, controller);
-    }
-
-    /**
-     * @param parent
      *            the parent
      * @param style
      *            the style
      */
-    public CSVViewerDialog(Shell parent, int style, Controller controller) {
-        // Let users override the default styles
-        super(parent, style);
+    public CSVViewerDialog(Shell parent, Controller controller, boolean ignoreDelimiterConfig, boolean isQueryOperationResult) {
+        super(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.MAX | SWT.MIN);
         setText(Labels.getString("CSVViewer.title")); //$NON-NLS-1$
         this.controller = controller;
+        this.ignoreDelimiterConfig = ignoreDelimiterConfig;
+        this.isQueryOperationResult = isQueryOperationResult;
     }
 
     /**
@@ -198,21 +189,9 @@ public class CSVViewerDialog extends Dialog {
                     Thread runner = new Thread() {
                         @Override
                         public void run() {
-                            int exitVal = 0;
-                            try {
-                                String[] cmd = { "cmd.exe", "/c", "\"" + filename + "\"" }; //$NON-NLS-1$ //$NON-NLS-2$
-                                Process proc = Runtime.getRuntime().exec(cmd);
-                                StreamGobbler errorGobbler = new StreamGobbler(proc.getErrorStream(), "ERROR"); //$NON-NLS-1$
-                                StreamGobbler outputGobbler = new StreamGobbler(proc.getInputStream(), "OUTPUT"); //$NON-NLS-1$
-                                errorGobbler.start();
-                                outputGobbler.start();
-                                exitVal = proc.waitFor();
-                            } catch (IOException iox) {
-                                logger.error(Labels.getString("CSVViewerDialog.errorExternal"), iox); //$NON-NLS-1$
-                            } catch (InterruptedException ie) {
-                                logger.error(Labels.getString("CSVViewerDialog.errorExternal"), ie); //$NON-NLS-1$
-                            }
-
+                            String[] cmd = { "cmd.exe", "/c", "\"" + filename + "\"" }; //$NON-NLS-1$ //$NON-NLS-2$
+                            
+                            int exitVal = AppUtil.exec(Arrays.asList(cmd), Labels.getString("CSVViewerDialog.errorExternal"));
                             if (exitVal != 0) {
                                 logger.error(Labels.getString("CSVViewerDialog.errorProcessExit") + exitVal); //$NON-NLS-1$
                             }
@@ -250,13 +229,22 @@ public class CSVViewerDialog extends Dialog {
 
     private void initializeCSVViewer(Shell shell) throws DataAccessObjectInitializationException {
         GridData data;
-
-        CSVFileReader csvReader = new CSVFileReader(filename, controller, useCustomSplitter);
-
+        
+        // use delimiter settings for load operations by specifying 'false' for isQueryOperationResult param
+        CSVFileReader csvReader = new CSVFileReader(new File(filename),
+                                        controller.getConfig(), ignoreDelimiterConfig, isQueryOperationResult);
         try {
-            csvReader.open();
+            List<String> header = new ArrayList<String>();
+            header.add("");
+            try {
+                csvReader.open();
+                header = csvReader.getColumnNames();
+            } catch (DataAccessObjectInitializationException ex) {
+                if (!Messages.getString("CSVFileDAO.errorHeaderRow").equals(ex.getMessage())) {
+                    throw ex;
+                }
+            }
 
-            List<String> header = csvReader.getColumnNames();
 
             //sforce field table viewer
             csvTblViewer = new TableViewer(shell, SWT.FULL_SELECTION);

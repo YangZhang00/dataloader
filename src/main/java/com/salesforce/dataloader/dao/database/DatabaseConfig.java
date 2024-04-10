@@ -25,9 +25,9 @@
  */
 package com.salesforce.dataloader.dao.database;
 
-import org.apache.commons.dbcp.BasicDataSource;
-import org.springframework.beans.factory.xml.XmlBeanFactory;
-import org.springframework.core.io.FileSystemResource;
+import org.apache.commons.dbcp2.BasicDataSource;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.support.FileSystemXmlApplicationContext;
 
 public class DatabaseConfig {
     private BasicDataSource dataSource;
@@ -44,7 +44,15 @@ public class DatabaseConfig {
      * @return instance of database configuration
      */
     public static DatabaseConfig getInstance (String dbConfigFilename, String dbConnectionName) {
-        XmlBeanFactory configFactory = new XmlBeanFactory(new FileSystemResource(dbConfigFilename));
+    	String dbConfigFileLocation = dbConfigFilename;
+    	
+    	//don't modify window local file system paths or URIs
+        if (!dbConfigFileLocation.contains(":")){
+        	dbConfigFileLocation = "file://".concat(dbConfigFileLocation);
+        }
+        
+    	@SuppressWarnings("resource")
+        ApplicationContext  configFactory = new FileSystemXmlApplicationContext(dbConfigFileLocation);
         return (DatabaseConfig)configFactory.getBean(dbConnectionName);
     }
 

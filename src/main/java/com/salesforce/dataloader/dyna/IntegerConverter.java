@@ -39,30 +39,7 @@ import org.apache.commons.beanutils.Converter;
 public final class IntegerConverter implements Converter {
 
     public IntegerConverter() {
-
-        this.defaultValue = null;
-        this.useDefault = false;
-
     }
-
-    public IntegerConverter(Object defaultValue) {
-
-        this.defaultValue = defaultValue;
-        this.useDefault = true;
-
-    }
-
-    // ----------------------------------------------------- Instance Variables
-
-    /**
-     * The default value specified to our Constructor, if any.
-     */
-    private Object defaultValue = null;
-
-    /**
-     * Should we return the default value on conversion errors?
-     */
-    private boolean useDefault = true;
 
     // --------------------------------------------------------- Public Methods
 
@@ -77,6 +54,7 @@ public final class IntegerConverter implements Converter {
      *                if conversion cannot be performed successfully
      */
     @Override
+    @SuppressWarnings({ "rawtypes", "unchecked" })
     public Object convert(Class type, Object value) {
         if (value == null || String.valueOf(value).length() == 0) {
             return null;
@@ -91,11 +69,7 @@ public final class IntegerConverter implements Converter {
         try {
             return (Integer.parseInt(value.toString()));
         } catch (Exception e) {
-            if (useDefault) {
-                return (defaultValue);
-            } else {
-                throw new ConversionException(e);
-            }
+            throw new ConversionException(e);
         }
     }
 

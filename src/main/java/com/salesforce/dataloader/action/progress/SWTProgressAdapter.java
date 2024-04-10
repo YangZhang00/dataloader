@@ -37,13 +37,13 @@ import org.eclipse.swt.widgets.Display;
 /**
  * @author Lexi Viripaeff
  */
-public class SWTProgressAdapter implements ILoaderProgress {
+public class SWTProgressAdapter extends NihilistProgressAdapter {
 
     private IProgressMonitor monitor = null;
-    private String dispMessage;
     private final Controller controller;
 
     public SWTProgressAdapter(IProgressMonitor monitor_, Controller controller) {
+        super();
         monitor = monitor_;
         this.controller = controller;
     }
@@ -53,13 +53,10 @@ public class SWTProgressAdapter implements ILoaderProgress {
      */
     @Override
     public void beginTask(String name, int totalWork) {
+        super.beginTask(name, totalWork);
         monitor.beginTask(name, totalWork);
     }
-
-    public void done() {
-        monitor.done();
-    }
-
+    
     /*
      * (non-Javadoc)
      *
@@ -67,9 +64,9 @@ public class SWTProgressAdapter implements ILoaderProgress {
      */
     @Override
     public void doneSuccess(String message) {
+        super.doneSuccess(message);
         monitor.done();
-
-        dispMessage = message;
+        controller.setLastOperationSuccessful(true);
         Display.getDefault().syncExec(new Thread() {
             @Override
             public void run() {
@@ -77,11 +74,11 @@ public class SWTProgressAdapter implements ILoaderProgress {
                 //if extraction pop open an extraction finished dialog
                 if (controller.getConfig().getOperationInfo().isExtraction()) {
                     ExtractionFinishDialog dlg = new ExtractionFinishDialog(LoaderWindow.getApp().getShell(), controller);
-                    dlg.setMessage(dispMessage);
+                    dlg.setMessage(getMessage());
                     dlg.open();
                 } else {
                     LoadFinishDialog dlg = new LoadFinishDialog(LoaderWindow.getApp().getShell(), controller);
-                    dlg.setMessage(dispMessage);
+                    dlg.setMessage(getMessage());
                     dlg.open();
                 }
             }
@@ -91,12 +88,13 @@ public class SWTProgressAdapter implements ILoaderProgress {
 
     @Override
     public void doneError(String message) {
+        super.doneError(message);
         monitor.done();
-        dispMessage = message;
+        controller.setLastOperationSuccessful(false);
         Display.getDefault().syncExec(new Thread() {
             @Override
             public void run() {
-                UIUtils.errorMessageBox(LoaderWindow.getApp().getShell(), dispMessage);
+                UIUtils.errorMessageBox(LoaderWindow.getApp().getShell(), getMessage());
             }
         });
     }
@@ -108,16 +106,8 @@ public class SWTProgressAdapter implements ILoaderProgress {
      */
     @Override
     public void worked(int worked) {
+        super.worked(worked);
         monitor.worked(worked);
-    }
-
-    /*
-     * (non-Javadoc)
-     *
-     * @see com.sfdc.action.progress.ILoaderProgress#setTaskName(java.lang.String)
-     */
-    public void setTaskName(String name) {
-        monitor.setTaskName(name);
     }
 
     /*
@@ -127,6 +117,7 @@ public class SWTProgressAdapter implements ILoaderProgress {
      */
     @Override
     public void setSubTask(String name) {
+        super.setSubTask(name);
         monitor.subTask(name);
     }
 
@@ -139,10 +130,4 @@ public class SWTProgressAdapter implements ILoaderProgress {
     public boolean isCanceled() {
         return monitor.isCanceled();
     }
-
-    @Override
-    public void setNumberBatchesTotal(int numberBatchesTotal) {
-        // nothing
-    }
-
 }

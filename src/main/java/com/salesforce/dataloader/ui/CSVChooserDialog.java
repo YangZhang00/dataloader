@@ -41,7 +41,6 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Dialog;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
@@ -49,10 +48,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.springframework.util.StringUtils;
 
-public class CSVChooserDialog extends Dialog {
-    private String message;
-    private String input;
-    private Controller controller;
+public class CSVChooserDialog extends BaseDialog {
     private Text textRows;
     private Button buttonSelect;
     private Button buttonSuccess;
@@ -66,84 +62,7 @@ public class CSVChooserDialog extends Dialog {
      */
     public CSVChooserDialog(Shell parent, Controller controller) {
         // Pass the default styles here
-        this(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
-        this.controller = controller;
-    }
-
-    /**
-     * InputDialog constructor
-     *
-     * @param parent
-     *            the parent
-     * @param style
-     *            the style
-     */
-    public CSVChooserDialog(Shell parent, int style) {
-        // Let users override the default styles
-        super(parent, style);
-        setText(Labels.getString("CSVChooser.title")); //$NON-NLS-1$
-        setMessage(Labels.getString("CSVChooser.message")); //$NON-NLS-1$
-    }
-
-    /**
-     * Gets the message
-     *
-     * @return String
-     */
-    public String getMessage() {
-        return message;
-    }
-
-    /**
-     * Sets the message
-     *
-     * @param message
-     *            the new message
-     */
-    public void setMessage(String message) {
-        this.message = message;
-    }
-
-    /**
-     * Gets the input
-     *
-     * @return String
-     */
-    public String getInput() {
-        return input;
-    }
-
-    /**
-     * Sets the input
-     *
-     * @param input
-     *            the new input
-     */
-    public void setInput(String input) {
-        this.input = input;
-    }
-
-    /**
-     * Opens the dialog and returns the input
-     *
-     * @return String
-     */
-    public String open() {
-        // Create the dialog window
-        Shell shell = new Shell(getParent(), getStyle());
-        shell.setText(getText());
-        shell.setImage(UIUtils.getImageRegistry().get("sfdc_icon")); //$NON-NLS-1$
-        createContents(shell);
-        shell.pack();
-        shell.open();
-        Display display = getParent().getDisplay();
-        while (!shell.isDisposed()) {
-            if (!display.readAndDispatch()) {
-                display.sleep();
-            }
-        }
-        // Return the entered value, or null
-        return input;
+        super(parent, controller);
     }
 
     /**
@@ -152,8 +71,7 @@ public class CSVChooserDialog extends Dialog {
      * @param shell
      *            the dialog window
      */
-    private void createContents(final Shell shell) {
-
+    protected void createContents(final Shell shell) {
         GridData data;
         GridLayout layout = new GridLayout(1, false);
         layout.verticalSpacing = 10;
@@ -181,7 +99,7 @@ public class CSVChooserDialog extends Dialog {
 
         // Show the message
         Label label = new Label(topComp, SWT.NONE);
-        label.setText(message);
+        label.setText(getMessage());
         data = new GridData(GridData.FILL_HORIZONTAL);
         data.heightHint = 30;
         data.widthHint = 370;
@@ -239,9 +157,8 @@ public class CSVChooserDialog extends Dialog {
                 FileDialog dlg = new FileDialog(shell, SWT.OPEN);
                 String fn = dlg.open();
                 if (fn != null) {
-                    openViewer(fn, true);
+                    openViewer(fn, false, false);
                 }
-
             }
         });
 
@@ -255,9 +172,9 @@ public class CSVChooserDialog extends Dialog {
         buttonSuccess.addSelectionListener(new SelectionAdapter() {
             @Override
             public void widgetSelected(SelectionEvent event) {
-                String successFilePath = controller.getConfig().getString(Config.OUTPUT_SUCCESS);
+                String successFilePath = getController().getConfig().getString(Config.OUTPUT_SUCCESS);
                 if(StringUtils.hasText(successFilePath)) {
-                    openViewer(successFilePath, false);
+                    openViewer(successFilePath, true, false);
                 } else {
                     UIUtils.infoMessageBox(shell, Messages.getString("CSVChooser.noSucessOrErrorFile"));
                 }
@@ -274,9 +191,9 @@ public class CSVChooserDialog extends Dialog {
         buttonError.addSelectionListener(new SelectionAdapter() {
             @Override
             public void widgetSelected(SelectionEvent event) {
-                String errorFilePath = controller.getConfig().getString(Config.OUTPUT_ERROR);
+                String errorFilePath = getController().getConfig().getString(Config.OUTPUT_ERROR);
                 if(StringUtils.hasText(errorFilePath)) {
-                    openViewer(errorFilePath, false);
+                    openViewer(errorFilePath, true, false);
                 } else {
                     UIUtils.infoMessageBox(shell, Messages.getString("CSVChooser.noSucessOrErrorFile"));
                 }
@@ -305,8 +222,6 @@ public class CSVChooserDialog extends Dialog {
         ok.addSelectionListener(new SelectionAdapter() {
             @Override
             public void widgetSelected(SelectionEvent event) {
-
-                input = "OK"; //$NON-NLS-1$
                 shell.close();
             }
         });
@@ -321,11 +236,11 @@ public class CSVChooserDialog extends Dialog {
         shell.setDefaultButton(ok);
     }
 
-    private void openViewer(String filename, boolean useCustomSplitter) {
-        CSVViewerDialog dlg = new CSVViewerDialog(getParent(), controller);
+    private void openViewer(String filename, boolean ignoreDelimiterConfig, boolean isQueryOperationResult) {
+        // 
+        CSVViewerDialog dlg = new CSVViewerDialog(getParent(), getController(), ignoreDelimiterConfig, isQueryOperationResult);
         dlg.setNumberOfRows(Integer.parseInt(textRows.getText()));
         dlg.setFileName(filename);
-        dlg.setUseCustomSplitter(useCustomSplitter);
         try {
             dlg.open();
         } catch (DataAccessObjectInitializationException e) {

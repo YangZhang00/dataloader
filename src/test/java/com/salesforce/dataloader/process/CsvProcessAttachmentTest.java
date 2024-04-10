@@ -26,10 +26,10 @@
 
 package com.salesforce.dataloader.process;
 
-import com.salesforce.dataloader.TestProgressMontitor;
 import com.salesforce.dataloader.TestSetting;
 import com.salesforce.dataloader.TestVariant;
 import com.salesforce.dataloader.action.OperationInfo;
+import com.salesforce.dataloader.action.progress.ILoaderProgress;
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.exception.DataAccessObjectException;
@@ -37,15 +37,18 @@ import com.salesforce.dataloader.exception.ProcessInitializationException;
 import com.salesforce.dataloader.exception.UnsupportedOperationException;
 import com.salesforce.dataloader.model.Row;
 import com.sforce.soap.partner.QueryResult;
+import com.sforce.soap.partner.SaveResult;
 import com.sforce.soap.partner.sobject.SObject;
 import com.sforce.ws.ConnectionException;
 import org.junit.Assert;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
@@ -74,7 +77,11 @@ public class CsvProcessAttachmentTest extends ProcessTestBase {
                 TestVariant.defaultSettings(),
                 TestVariant.forSettings(TestSetting.BULK_API_ENABLED),
                 TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_SERIAL_MODE_ENABLED),
-                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_ZIP_CONTENT_ENABLED));
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_ZIP_CONTENT_ENABLED),
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_V2_API_ENABLED),
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_V2_API_ENABLED, TestSetting.BULK_API_SERIAL_MODE_ENABLED),
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_V2_API_ENABLED, TestSetting.BULK_API_ZIP_CONTENT_ENABLED)
+            );
     }
 
     @Test
@@ -88,13 +95,51 @@ public class CsvProcessAttachmentTest extends ProcessTestBase {
 
         // this feature does not work when bulk api is enabled but the zip content type is not
         final boolean bulkApi = isBulkAPIEnabled(argMap);
+        final boolean bulkV2Api = isBulkV2APIEnabled(argMap);
         final boolean zipContent = isSettingEnabled(argMap, Config.BULK_API_ZIP_CONTENT);
-        if (bulkApi && !zipContent) {
+        if ((bulkApi || bulkV2Api) && !zipContent) {
             final String failureMessage = "Data Loader cannot map \"Body\" field using Bulk API and CSV content type.  Please enable the ZIP_CSV content type for Bulk API.";
+            runProcessNegative(argMap, failureMessage);
+        } else if (bulkV2Api && zipContent) {
+            final String failureMessage = "Exit UNSUPPORTEDCONTENTTYPE : UnsupportedContentType : ZIP_CSV is not a valid Content-Type";
             runProcessNegative(argMap, failureMessage);
         } else {
             runProcess(argMap, 1);
         }
+    }
+    
+    @Test
+    public void testPolymorphicRelationshipInAttachment() throws ProcessInitializationException, DataAccessObjectException, ConnectionException {
+        // convert the template using the parent account id
+        Map<String, String> configMap = getTestConfig(OperationInfo.insert, false);
+
+        // this feature does not work when bulk api is enabled but the zip content type is not
+        final boolean bulkApi = isBulkAPIEnabled(configMap);
+        final boolean bulkV2Api = isBulkV2APIEnabled(configMap);
+        final boolean zipContent = isSettingEnabled(configMap, Config.BULK_API_ZIP_CONTENT);
+        if (bulkApi && !zipContent) {
+            // attachment is supported only if content is zipped
+            return;
+        } else if (bulkV2Api) {
+            // bulk v2 does not support zip content and therefore attachment
+            return;
+        }
+        AccountGenerator acctGen = new AccountGenerator();
+        SObject[] parentAccts = new SObject[1];
+        parentAccts[0] = acctGen.getObject(0, false);
+        // value of Oracle_id__c = 1-000000
+        SaveResult[] results = getBinding().create(parentAccts);
+        parentAccts[0].addField("id", results[0]);
+ 
+        ContactGenerator contactGen = new ContactGenerator();
+        SObject[] parentContacts = new SObject[1];
+        parentContacts[0] = contactGen.getObject(0, false);
+        // value of Oracle_id__c = 1-000000
+        results = getBinding().create(parentContacts);
+        parentContacts[0].addField("id", results[0]);
+
+        configMap.put(Config.ENTITY, "Attachment");
+        runProcess(configMap, 2);
     }
 
     /**
@@ -112,12 +157,18 @@ public class CsvProcessAttachmentTest extends ProcessTestBase {
 
         final Map<String, String> argMap = getTestConfig(OperationInfo.insert, fileName, false);
         argMap.put(Config.ENTITY, "Attachment");
+        // force multiple batches
+        argMap.put(Config.LOAD_BATCH_SIZE, "1");
 
         // this feature does not work when bulk api is enabled but the zip content type is not
         final boolean bulkApi = isBulkAPIEnabled(argMap);
+        final boolean bulkV2Api = isBulkV2APIEnabled(argMap);
         final boolean zipContent = isSettingEnabled(argMap, Config.BULK_API_ZIP_CONTENT);
-        if (bulkApi && !zipContent) {
+        if ((bulkApi || bulkV2Api) && !zipContent) {
             final String failureMessage = "Data Loader cannot map \"Body\" field using Bulk API and CSV content type.  Please enable the ZIP_CSV content type for Bulk API.";
+            runProcessNegative(argMap, failureMessage);
+        } else if (bulkV2Api && zipContent) {
+            final String failureMessage = "Exit UNSUPPORTEDCONTENTTYPE : UnsupportedContentType : ZIP_CSV is not a valid Content-Type";
             runProcessNegative(argMap, failureMessage);
         } else {
             runProcessWithAttachmentListener(argMap, 3, myAttachmentTemplateListener, "Bay-Bridge.jpg", "BayBridgeBW.jpg", "BayBridgeFromTreasureIsland.jpg");
@@ -144,21 +195,21 @@ public class CsvProcessAttachmentTest extends ProcessTestBase {
                                                         AttachmentTemplateListener myAttachmentTemplateListener, String... files)
             throws ProcessInitializationException, DataAccessObjectException, ConnectionException, IOException {
 
-        if (argMap == null) argMap = getTestConfig();
-
-        final ProcessRunner runner = ProcessRunner.getInstance(argMap);
-        runner.setName(this.baseName);
-
-        final TestProgressMontitor monitor = new TestProgressMontitor();
-        runner.run(monitor);
+        final IProcess runner = this.runBatchProcess(argMap);
+        ILoaderProgress monitor = runner.getMonitor();
         Controller controller = runner.getController();
 
         // verify process completed as expected
         if (expectProcessSuccess) {
-
             verifyInsertCorrectByContent(controller, createAttachmentFileMap(files), myAttachmentTemplateListener);
             // this should also still work
             assertTrue("Process failed: " + monitor.getMessage(), monitor.isSuccess());
+            Map<String, InputStream> attachments = controller.getLastExecutedAction().getVisitor().getAttachments();
+            if ( attachments!= null) {
+                // attachments map must be cleared when a batch is uploaded
+                assertTrue("Incorrect number of attachments in the batch: expected 0, actual " + attachments.keySet().size(),
+                        attachments.keySet().size() == 0);
+            }
             verifyFailureFile(controller, numFailures); // A.S.: To be removed and replaced
             verifySuccessFile(controller, numInserts, numUpdates, false);
 

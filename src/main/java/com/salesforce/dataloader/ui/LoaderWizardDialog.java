@@ -43,6 +43,8 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 
+import com.salesforce.dataloader.config.Config;
+
 /**
  * A dialog to show a wizard to the end user.
  * <p>
@@ -92,9 +94,7 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
     private SelectionAdapter cancelListener;
     private boolean isMovingToPreviousPage = false;
     private Composite pageContainer;
-    private PageContainerFillLayout pageContainerLayout = new PageContainerFillLayout(5, 5, 300, 225);
-    private int pageWidth = SWT.DEFAULT;
-    private int pageHeight = SWT.DEFAULT;
+    private PageContainerFillLayout pageContainerLayout = null;
     private static final String FOCUS_CONTROL = "focusControl"; //$NON-NLS-1$
     private boolean lockedUI = false;
     private HashMap<Integer, Button> buttons;
@@ -145,27 +145,30 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
          */
         @Override
         public Point computeSize(Composite composite, int wHint, int hHint, boolean force) {
-            if (wHint != SWT.DEFAULT && hHint != SWT.DEFAULT) return new Point(wHint, hHint);
-            Point result = null;
+            Point computedSizePoint = new Point(wHint, hHint);
+            if (wHint != SWT.DEFAULT && hHint != SWT.DEFAULT) {
+                computedSizePoint = new Point(wHint, hHint);
+                return computedSizePoint;
+            }
             Control[] children = composite.getChildren();
             if (children.length > 0) {
-                result = new Point(0, 0);
+                computedSizePoint = new Point(0, 0);
                 for (int i = 0; i < children.length; i++) {
                     Point cp = children[i].computeSize(wHint, hHint, force);
-                    result.x = Math.max(result.x, cp.x);
-                    result.y = Math.max(result.y, cp.y);
+                    computedSizePoint.x = Math.max(computedSizePoint.x, cp.x);
+                    computedSizePoint.y = Math.max(computedSizePoint.y, cp.y);
                 }
-                result.x = result.x + 2 * marginWidth;
-                result.y = result.y + 2 * marginHeight;
+                computedSizePoint.x = computedSizePoint.x + 2 * marginWidth;
+                computedSizePoint.y = computedSizePoint.y + 2 * marginHeight;
             } else {
                 Rectangle rect = composite.getClientArea();
-                result = new Point(rect.width, rect.height);
+                computedSizePoint = new Point(rect.width, rect.height);
             }
-            result.x = Math.max(result.x, minimumWidth);
-            result.y = Math.max(result.y, minimumHeight);
-            if (wHint != SWT.DEFAULT) result.x = wHint;
-            if (hHint != SWT.DEFAULT) result.y = hHint;
-            return result;
+            computedSizePoint.x = Math.max(computedSizePoint.x, minimumWidth);
+            computedSizePoint.y = Math.max(computedSizePoint.y, minimumHeight);
+            if (wHint != SWT.DEFAULT) computedSizePoint.x = wHint;
+            if (hHint != SWT.DEFAULT) computedSizePoint.y = hHint;
+            return computedSizePoint;
         }
 
         /**
@@ -225,11 +228,16 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
      * @param newWizard
      *            the wizard this dialog is working on
      */
-    public LoaderWizardDialog(Shell parentShell, IWizard newWizard) {
+    public LoaderWizardDialog(Shell parentShell, IWizard newWizard, Config config) {
         super(parentShell);
+        Rectangle shellBounds = UIUtils.getPersistedWizardBounds(config);
+        this.pageContainerLayout = new PageContainerFillLayout(5, 5, 
+                shellBounds.width,
+                shellBounds.height);
         buttons = new HashMap<>();
         setShellStyle(SWT.CLOSE | SWT.TITLE | SWT.BORDER | SWT.APPLICATION_MODAL | SWT.RESIZE);
         setWizard(newWizard);
+        setShellStyle(getShellStyle() | SWT.RESIZE);
         // since VAJava can't initialize an instance var with an anonymous
         // class outside a constructor we do it here:
         cancelListener = new SelectionAdapter() {
@@ -286,6 +294,7 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
             return;
         // set flag to indicate that we are moving back
         isMovingToPreviousPage = true;
+        ((WizardPage)currentPage).setPageComplete(false);
         // show the page
         showPage(page);
     }
@@ -314,25 +323,6 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
         }
         // The Cancel button has a listener which calls cancelPressed directly
         }
-    }
-
-    /**
-     * Calculates the difference in size between the given page and the page container. A larger page results in a
-     * positive delta.
-     *
-     * @param page
-     *            the page
-     * @return the size difference encoded as a <code>new Point(deltaWidth,deltaHeight)</code>
-     */
-    private Point calculatePageSizeDelta(IWizardPage page) {
-        Control pageControl = page.getControl();
-        if (pageControl == null)
-            // control not created yet
-            return new Point(0, 0);
-        Point contentSize = pageControl.computeSize(SWT.DEFAULT, SWT.DEFAULT, true);
-        Rectangle rect = pageContainerLayout.getClientArea(pageContainer);
-        Point containerSize = new Point(rect.width, rect.height);
-        return new Point(Math.max(0, contentSize.x - containerSize.x), Math.max(0, contentSize.y - containerSize.y));
     }
 
     /*
@@ -478,8 +468,6 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
         // Build the Page container
         pageContainer = createPageContainer(composite);
         GridData gd = new GridData(GridData.FILL_BOTH);
-        gd.widthHint = pageWidth;
-        gd.heightHint = pageHeight;
         pageContainer.setLayoutData(gd);
         pageContainer.setFont(parent.getFont());
         // Insert a progress monitor
@@ -728,6 +716,7 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
             // something must have happend getting the next page
             return;
         }
+        
         // show the next page
         showPage(page);
     }
@@ -763,9 +752,9 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
      *            the key
      * @see #saveEnableStateAndSet
      */
-    private void restoreEnableState(Control w, Map h, String key) {
+    private void restoreEnableState(Control w, Map<String, Boolean> h, String key) {
         if (w != null) {
-            Boolean b = (Boolean)h.get(key);
+            Boolean b = h.get(key);
             if (b != null) w.setEnabled(b.booleanValue());
         }
     }
@@ -778,7 +767,7 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
      *            a map containing the saved state as returned by <code>saveUIState</code>
      * @see #saveUIState
      */
-    private void restoreUIState(Map state) {
+    private void restoreUIState(Map<String, Boolean> state) {
         restoreEnableState(backButton, state, "back"); //$NON-NLS-1$
         restoreEnableState(nextButton, state, "next"); //$NON-NLS-1$
         restoreEnableState(finishButton, state, "finish"); //$NON-NLS-1$
@@ -902,8 +891,7 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
      * @see #setPageSize(Point)
      */
     public void setPageSize(int width, int height) {
-        pageWidth = width;
-        pageHeight = height;
+        // no op
     }
 
     /**
@@ -936,7 +924,6 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
                 // This allows the wizard to open to the correct size
                 createPageControls();
                 // Ensure the dialog is large enough for the wizard
-                updateSizeForWizard(wizard);
                 pageContainer.layout(true);
             }
         } else {
@@ -1000,6 +987,8 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
         IWizardPage oldPage = currentPage;
         currentPage = page;
         currentPage.setVisible(true);
+        OperationPage opPage = (OperationPage)currentPage;
+        opPage.setPageComplete();
         if (oldPage != null) oldPage.setVisible(false);
         // update the dialog controls
         update();
@@ -1037,14 +1026,15 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
      *            the saved UI state as returned by <code>aboutToStart</code>
      * @see #aboutToStart
      */
+    @SuppressWarnings("unchecked")
     private void stopped(Object savedState) {
         if (getShell() != null) {
             if (wizard.needsProgressMonitor()) {
                 progressMonitorPart.setVisible(false);
                 progressMonitorPart.removeFromCancelComponent(cancelButton);
             }
-            Map state = (Map)savedState;
-            restoreUIState(state);
+            Map<?,?> state = (Map<?,?>)savedState;
+            restoreUIState((Map<String, Boolean>)state);
             cancelButton.addSelectionListener(cancelListener);
             setDisplayCursor(null);
             cancelButton.setCursor(null);
@@ -1067,6 +1057,8 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
         updateTitleBar();
         // Update the buttons
         updateButtons();
+        // update size
+        updateSize();
     }
 
     /*
@@ -1076,8 +1068,8 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
     public void updateButtons() {
         boolean canFlipToNextPage = false;
         boolean canFinish = wizard.canFinish();
-        if (backButton != null) backButton.setEnabled(currentPage.getPreviousPage() != null);
-        if (nextButton != null) {
+        if (backButton != null) backButton.setEnabled(currentPage != null && currentPage.getPreviousPage() != null);
+        if (nextButton != null && currentPage != null) {
             canFlipToNextPage = currentPage.canFlipToNextPage();
             nextButton.setEnabled(canFlipToNextPage);
         }
@@ -1131,21 +1123,6 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
     }
 
     /**
-     * Changes the shell size to the given size, ensuring that it is no larger than the display bounds.
-     *
-     * @param width
-     *            the shell width
-     * @param height
-     *            the shell height
-     */
-    private void setShellSize(int width, int height) {
-        Rectangle size = getShell().getBounds();
-        size.height = height;
-        size.width = width;
-        getShell().setBounds(getConstrainedShellBounds(size));
-    }
-
-    /**
      * Computes the correct dialog size for the current page and resizes its shell if nessessary. Also causes the
      * container to refresh its layout.
      *
@@ -1155,7 +1132,9 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
      */
     protected void updateSize(IWizardPage page) {
         if (page == null || page.getControl() == null) return;
-        updateSizeForPage(page);
+        Shell shell = this.getShell();
+        Rectangle savedBounds = UIUtils.getPersistedWizardBounds(((OperationPage)page).controller.getConfig());
+        shell.setBounds(getConstrainedShellBounds(savedBounds));
         pageContainerLayout.layoutPage(page.getControl());
     }
 
@@ -1167,47 +1146,6 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
     @Override
     public void updateSize() {
         updateSize(currentPage);
-    }
-
-    /**
-     * Computes the correct dialog size for the given page and resizes its shell if nessessary.
-     *
-     * @param page
-     *            the wizard page
-     */
-    private void updateSizeForPage(IWizardPage page) {
-        // ensure the page container is large enough
-        Point delta = calculatePageSizeDelta(page);
-        if (delta.x > 0 || delta.y > 0) {
-            // increase the size of the shell
-            Shell shell = getShell();
-            Point shellSize = shell.getSize();
-            setShellSize(shellSize.x + delta.x, shellSize.y + delta.y);
-            constrainShellSize();
-        }
-    }
-
-    /**
-     * Computes the correct dialog size for the given wizard and resizes its shell if nessessary.
-     *
-     * @param sizingWizard
-     *            the wizard
-     */
-    private void updateSizeForWizard(IWizard sizingWizard) {
-        Point delta = new Point(0, 0);
-        IWizardPage[] pages = sizingWizard.getPages();
-        for (int i = 0; i < pages.length; i++) {
-            // ensure the page container is large enough
-            Point pageDelta = calculatePageSizeDelta(pages[i]);
-            delta.x = Math.max(delta.x, pageDelta.x);
-            delta.y = Math.max(delta.y, pageDelta.y);
-        }
-        if (delta.x > 0 || delta.y > 0) {
-            // increase the size of the shell
-            Shell shell = getShell();
-            Point shellSize = shell.getSize();
-            setShellSize(shellSize.x + delta.x, shellSize.y + delta.y);
-        }
     }
 
     /*
@@ -1264,5 +1202,4 @@ public class LoaderWizardDialog extends LoaderTitleAreaDialog implements IWizard
         return button;
 
     }
-
 }

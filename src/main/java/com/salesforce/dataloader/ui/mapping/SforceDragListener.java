@@ -61,15 +61,15 @@ public class SforceDragListener extends DragSourceAdapter {
         try {
             if (event.detail == DND.DROP_MOVE) {
                 IStructuredSelection selection = (IStructuredSelection)viewer.getSelection();
-                for (Iterator it = selection.iterator(); it.hasNext();) {
+                for (Iterator<?> it = selection.iterator(); it.hasNext();) {
                     @SuppressWarnings("unchecked")
                     Map.Entry<String, String> eventElem = (Entry<String, String>)it.next();
                     eventElem.setValue("");
                     dlg.getMapper().removeMapping(eventElem.getKey());
                 }
 
-                viewer.refresh();
                 dlg.packMappingColumns();
+                viewer.refresh();
             }
         } catch (Exception e) {
             e.printStackTrace();

@@ -25,16 +25,12 @@
  */
 package com.salesforce.dataloader.ui;
 
-import com.google.gson.FieldNamingPolicy;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.salesforce.dataloader.client.SimplePost;
 import com.salesforce.dataloader.client.SimplePostFactory;
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.exception.ParameterLoadException;
-import com.salesforce.dataloader.model.OAuthToken;
-import org.apache.http.NameValuePair;
-import org.apache.http.client.utils.URIBuilder;
+import com.salesforce.dataloader.util.OAuthBrowserLoginRunner;
+
 import org.apache.http.message.BasicNameValuePair;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
@@ -43,14 +39,12 @@ import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.browser.ProgressEvent;
 import org.eclipse.swt.widgets.Shell;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * the oauth authorization_code. this is normally reserved for server to server communications as it involves storing
@@ -58,7 +52,7 @@ import java.util.Optional;
  * it prompts for authentication but not authorization (once it's been authorized at least once).
  */
 public class OAuthSecretFlow extends OAuthFlow {
-    protected static Logger logger = LogManager.getLogger(OAuthFlow.class);
+    protected static Logger logger = LogManager.getLogger(OAuthSecretFlow.class);
 
     public OAuthSecretFlow(Shell parent, Config config) {
         super(parent, config);
@@ -79,7 +73,7 @@ public class OAuthSecretFlow extends OAuthFlow {
         return config.getString(Config.OAUTH_SERVER) +
                 "/services/oauth2/authorize?response_type=code&display=popup&client_id=" +
                 config.getString(Config.OAUTH_CLIENTID) + "&redirect_uri=" +
-                URLEncoder.encode(config.getString(Config.OAUTH_REDIRECTURI), "UTF-8");
+                URLEncoder.encode(config.getString(Config.OAUTH_REDIRECTURI), StandardCharsets.UTF_8.name());
     }
 
     public static class OAuthSecretBrowserListener extends OAuthBrowserListener {
@@ -95,6 +89,7 @@ public class OAuthSecretFlow extends OAuthFlow {
 
         @Override
         public void completed(ProgressEvent progressEvent) {
+            super.completed(progressEvent);
             String url = browser.getUrl();
             try {
                 String code = handleInitialUrl(url);
@@ -122,26 +117,9 @@ public class OAuthSecretFlow extends OAuthFlow {
                     new BasicNameValuePair("redirect_uri", config.getString(Config.OAUTH_REDIRECTURI))
             );
             client.post();
-
             if (client.isSuccessful()) {
-
-                StringBuilder builder = new StringBuilder();
-                BufferedReader in = new BufferedReader(new InputStreamReader(client.getInput(), "UTF-8"));
-                for (int c = in.read(); c != -1; c = in.read()) {
-                    builder.append((char) c);
-                }
-
-                String jsonTokenResult = builder.toString();
-                Gson gson = new GsonBuilder()
-                        .setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES)
-                        .create();
-                OAuthToken token = gson.fromJson(jsonTokenResult, OAuthToken.class);
-                config.setValue(Config.OAUTH_ACCESSTOKEN, token.getAccessToken());
-                config.setValue(Config.OAUTH_REFRESHTOKEN, token.getRefreshToken());
-                config.setValue(Config.ENDPOINT, token.getInstanceUrl());
-
+                OAuthBrowserLoginRunner.processSuccessfulLogin(client.getInput(), config);
             }
-
             return client;
         }
 

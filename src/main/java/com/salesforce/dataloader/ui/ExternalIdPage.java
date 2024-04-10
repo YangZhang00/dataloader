@@ -48,23 +48,13 @@ import com.sforce.soap.partner.Field;
  */
 public class ExternalIdPage extends LoadPage {
 
-    private final Controller controller;
     private Composite comp;
     private Combo extIdFieldCombo;
     private Label labelExtId;
     private Label labelExtIdInfo;
 
     public ExternalIdPage(Controller controller) {
-        super(Labels.getString("ExternalIdPage.title"), //$NON-NLS-1$
-                Labels.getString("ExternalIdPage.message"), //$NON-NLS-1$
-                UIUtils.getImageRegistry().getDescriptor("splashscreens")); //$NON-NLS-1$
-
-        this.controller = controller;
-
-        // Set the description
-        setDescription(Labels.getString("ExternalIdPage.description"));  //$NON-NLS-1$
-
-        setPageComplete(false);
+        super("ExternalIdPage", controller); //$NON-NLS-1$
     }
 
     @Override
@@ -106,12 +96,7 @@ public class ExternalIdPage extends LoadPage {
         extIdFieldCombo.addSelectionListener(new SelectionListener() {
             @Override
             public void widgetSelected(SelectionEvent arg0) {
-                String fieldName = extIdFieldCombo.getText();
-                if (fieldName != null && !fieldName.equals("") ) { //$NON-NLS-1$
-                    setPageComplete(true);
-                } else {
-                    setPageComplete(false);
-                }
+                setPageComplete();
             }
             @Override
             public void widgetDefaultSelected(SelectionEvent arg0) {
@@ -137,11 +122,8 @@ public class ExternalIdPage extends LoadPage {
         Field[] fields = fieldTypes.getFields();
         ArrayList<String> extIdFields = new ArrayList<String>();
         for(Field field : fields) {
-            // salesforce id can be used for upsert in addition to external id fields
-            if("id".equals(field.getName().toLowerCase())) {
-                extIdFields.add(field.getName());
-            }
-            if(field.isExternalId() && (field.isCreateable() || field.isUpdateable())) {
+            // every idLookup field can be used for upserts, including Id and Name
+            if(field.isIdLookup()) {
                 extIdFields.add(field.getName());
             }
         }
@@ -153,11 +135,10 @@ public class ExternalIdPage extends LoadPage {
             extIdFieldCombo.setEnabled(false);
             extIdFieldCombo.setText(extIdNames[0]);
             labelExtIdInfo.setText(Labels.getFormattedString("ExternalIdPage.externalIdInfoNoExtId", controller.getConfig().getString(Config.ENTITY))); //$NON-NLS-1$
-            setPageComplete(true);
         } else {
             labelExtIdInfo.setText(Labels.getFormattedString("ExternalIdPage.externalIdInfoExtIdExists", controller.getConfig().getString(Config.ENTITY))); //$NON-NLS-1$
-            setPageComplete(false);
         }
+        setPageComplete();
         comp.layout();
 
         if (extIdNames.length > 0 ) {
@@ -178,15 +159,14 @@ public class ExternalIdPage extends LoadPage {
 
         // prepare next page
         LoadPage nextPage = null;
-        ForeignKeyExternalIdPage fkExtIdPage = (ForeignKeyExternalIdPage) getWizard().getPage(Labels.getString("ForeignKeyExternalIdPage.title")); //$NON-NLS-1$
+        ChooseLookupFieldForRelationshipPage fkExtIdPage = (ChooseLookupFieldForRelationshipPage) getWizard().getPage(ChooseLookupFieldForRelationshipPage.class.getSimpleName()); //$NON-NLS-1$
         if(controller.getReferenceDescribes().size() > 0) {
-            fkExtIdPage.setPageComplete(true);
             nextPage = fkExtIdPage;
         } else {
-            fkExtIdPage.setPageComplete(true);
-            nextPage = (LoadPage)getWizard().getPage(Labels.getString("MappingPage.title")); //$NON-NLS-1$
+            nextPage = (LoadPage)getWizard().getPage(MappingPage.class.getSimpleName()); //$NON-NLS-1$
         }
         nextPage.setupPage();
+        nextPage.setPageComplete();
         return nextPage;
     }
 
@@ -209,7 +189,7 @@ public class ExternalIdPage extends LoadPage {
      * @see com.salesforce.dataloader.ui.LoadPage#setupPage()
      */
     @Override
-    boolean setupPage() {
+    public boolean setupPagePostLogin() {
         if (!setExtIdCombo()) {
             //if there is no external id, don't let them continue.
             MessageBox msg = new MessageBox(getShell(), SWT.ICON_ERROR | SWT.OK);
@@ -217,8 +197,17 @@ public class ExternalIdPage extends LoadPage {
             msg.setText(Labels.getString("ExternalIdPage.errorExternalIdRequiredTitle"));
             msg.open();
             return false;
-        } else {
-            return true;
         }
+        return true;
+    }
+
+    @Override
+    public void setPageComplete() {
+        String fieldName = extIdFieldCombo.getText();
+        if (fieldName != null && !fieldName.equals("") ) { //$NON-NLS-1$
+            setPageComplete(true);
+        } else {
+            setPageComplete(false);
+        }        
     }
 }

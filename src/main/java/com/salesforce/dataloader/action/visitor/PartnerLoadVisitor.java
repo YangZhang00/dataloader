@@ -28,7 +28,6 @@ package com.salesforce.dataloader.action.visitor;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 
 import com.salesforce.dataloader.model.Row;
 import org.apache.commons.beanutils.DynaBean;
@@ -62,6 +61,7 @@ public abstract class PartnerLoadVisitor extends DAOLoadVisitor {
     @Override
     protected void loadBatch() throws DataAccessObjectException, LoadException {
         Object[] results = null;
+        setHeaders();
         try {
             results = executeClientAction(getController().getPartnerClient(), dynaArray);
         } catch (ApiFault e) {
@@ -70,7 +70,20 @@ public abstract class PartnerLoadVisitor extends DAOLoadVisitor {
             handleException(e);
         }
 
-        // set the current processed
+        writeOutputToWriter(results);
+        setLastRunProperties(results);
+
+        // update Monitor
+        getProgressMonitor().worked(results.length);
+        getProgressMonitor().setSubTask(getRateCalculator().calculateSubTask(getNumberOfRows(), getNumberErrors()));
+
+        // now clear the arrays
+        clearArrays();
+
+    }
+    
+    private void setLastRunProperties(Object[] results) throws LoadException {
+        // set the last processed row number in the config (*_lastRun.properties) file
         int currentProcessed;
         try {
             currentProcessed = getConfig().getInt(LastRun.LAST_LOAD_BATCH_ROW);
@@ -87,33 +100,44 @@ public abstract class PartnerLoadVisitor extends DAOLoadVisitor {
             getLogger().error(errMsg, e);
             handleException(errMsg, e);
         }
-
-        writeOutputToWriter(results, dataArray);
-
-        // update Monitor
-        getProgressMonitor().worked(results.length);
-        getProgressMonitor().setSubTask(getRateCalculator().calculateSubTask(getNumberOfRows(), getNumberErrors()));
-
-        // now clear the arrays
-        clearArrays();
-
+    }
+    
+    private void setHeaders() {
+        setKeepAccountTeamHeader();
+    }
+    
+    private void setKeepAccountTeamHeader() {
+        Config config = this.controller.getConfig();
+        OwnerChangeOption keepAccountTeamOption = new OwnerChangeOption();
+        OwnerChangeOption[] ownerChangeOptionArray;
+        if (config.getBoolean(Config.PROCESS_KEEP_ACCOUNT_TEAM) 
+                && "Account".equalsIgnoreCase(config.getString(Config.ENTITY))) {
+            // Support for Keeping Account keepAccountTeam during Account ownership change
+            // More details at https://developer.salesforce.com/docs/atlas.en-us.api.meta/api/sforce_api_header_ownerchangeoptions.htm
+            keepAccountTeamOption.setExecute(true);
+            keepAccountTeamOption.setType(OwnerChangeOptionType.KeepAccountTeam); // Transfer Open opportunities owned by the account's owner
+            ownerChangeOptionArray = new OwnerChangeOption[] {keepAccountTeamOption};
+        } else {
+            // clear ownerChangeOptions from the existing connection otherwise.
+            ownerChangeOptionArray = new OwnerChangeOption[] {};
+        }
+        this.controller.getPartnerClient().getConnection().setOwnerChangeOptions(ownerChangeOptionArray);
     }
 
-    private void writeOutputToWriter(Object[] results, List<Row> dataArray)
+    private void writeOutputToWriter(Object[] results)
             throws DataAccessObjectException, LoadException {
-
-        if (results.length != dataArray.size()) {
-            getLogger().fatal(Messages.getString("Visitor.errorResultsLength")); //$NON-NLS-1$
-            throw new LoadException(Messages.getString("Visitor.errorResultsLength"));
-        }
 
         // have to do this because although saveResult and deleteResult
         // are a) not the same class yet b) not subclassed
-        for (int i = 0; i < results.length; i++) {
-            Row dataRow = dataArray.get(i);
+        int batchRowCounter = 0;
+        for (int i = 0; i < this.daoRowList.size(); i++) {
+            Row daoRow = this.daoRowList.get(i);
+            if (!isRowConversionSuccessful()) {
+                continue;
+            }
             String statusMsg = null;
             if (results instanceof SaveResult[]) {
-                SaveResult saveRes = (SaveResult)results[i];
+                SaveResult saveRes = (SaveResult)results[batchRowCounter];
                 if (saveRes.getSuccess()) {
                     if (OperationInfo.insert == getConfig().getOperationInfo()) {
                         statusMsg = Messages.getString("DAOLoadVisitor.statusItemCreated");
@@ -121,24 +145,40 @@ public abstract class PartnerLoadVisitor extends DAOLoadVisitor {
                         statusMsg = Messages.getString("DAOLoadVisitor.statusItemUpdated");
                     }
                 }
-                dataRow.put(Config.STATUS_COLUMN_NAME, statusMsg);
-                processResult(dataRow, saveRes.getSuccess(), saveRes.getId(), saveRes.getErrors());
+                daoRow.put(Config.STATUS_COLUMN_NAME, statusMsg);
+                processResult(daoRow, saveRes.getSuccess(), saveRes.getId(), saveRes.getErrors());
             } else if (results instanceof DeleteResult[]) {
-                DeleteResult deleteRes = (DeleteResult)results[i];
+                DeleteResult deleteRes = (DeleteResult)results[batchRowCounter];
                 if (deleteRes.getSuccess()) {
                     statusMsg = Messages.getString("DAOLoadVisitor.statusItemDeleted");
                 }
-                dataRow.put(Config.STATUS_COLUMN_NAME, statusMsg);
-                processResult(dataRow, deleteRes.getSuccess(), deleteRes.getId(), deleteRes.getErrors());
+                daoRow.put(Config.STATUS_COLUMN_NAME, statusMsg);
+                processResult(daoRow, deleteRes.getSuccess(), deleteRes.getId(), deleteRes.getErrors());
+            } else if (results instanceof UndeleteResult[]) {
+                UndeleteResult undeleteRes = (UndeleteResult)results[batchRowCounter];
+                if (undeleteRes.getSuccess()) {
+                    statusMsg = Messages.getString("DAOLoadVisitor.statusItemUndeleted");
+                }
+                daoRow.put(Config.STATUS_COLUMN_NAME, statusMsg);
+                processResult(daoRow, undeleteRes.getSuccess(), undeleteRes.getId(), undeleteRes.getErrors());
             } else if (results instanceof UpsertResult[]) {
-                UpsertResult upsertRes = (UpsertResult)results[i];
+                UpsertResult upsertRes = (UpsertResult)results[batchRowCounter];
                 if (upsertRes.getSuccess()) {
                     statusMsg = upsertRes.getCreated() ? Messages.getString("DAOLoadVisitor.statusItemCreated")
                             : Messages.getString("DAOLoadVisitor.statusItemUpdated");
                 }
-                dataRow.put(Config.STATUS_COLUMN_NAME, statusMsg);
-                processResult(dataRow, upsertRes.getSuccess(), upsertRes.getId(), upsertRes.getErrors());
+                daoRow.put(Config.STATUS_COLUMN_NAME, statusMsg);
+                processResult(daoRow, upsertRes.getSuccess(), upsertRes.getId(), upsertRes.getErrors());
             }
+            batchRowCounter++;
+            if (results.length < batchRowCounter) {
+                getLogger().fatal(Messages.getString("Visitor.errorResultsLength")); //$NON-NLS-1$
+                throw new LoadException(Messages.getString("Visitor.errorResultsLength"));
+            }
+        }
+        if (results.length > batchRowCounter) {
+            getLogger().fatal(Messages.getString("Visitor.errorResultsLength")); //$NON-NLS-1$
+            throw new LoadException(Messages.getString("Visitor.errorResultsLength"));
         }
     }
 

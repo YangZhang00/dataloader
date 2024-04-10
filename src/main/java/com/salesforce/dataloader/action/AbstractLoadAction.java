@@ -50,7 +50,7 @@ import java.util.List;
  * @since 6.0
  */
 abstract class AbstractLoadAction extends AbstractAction {
-
+    
     protected AbstractLoadAction(Controller controller, ILoaderProgress monitor)
             throws DataAccessObjectInitializationException {
         super(controller, monitor);
@@ -78,11 +78,19 @@ abstract class AbstractLoadAction extends AbstractAction {
     ConnectionException {
 
         final int loadBatchSize = this.getConfig().getLoadBatchSize();
+        final int daoRowNumBase = getDao().getCurrentRowNumber();
         final List<Row> daoRowList = getDao().readRowList(loadBatchSize);
         if (daoRowList == null || daoRowList.size() == 0) return false;
+        int daoRowCount = 0;
+
         for (final Row daoRow : daoRowList) {
-            if (!DAORowUtil.isValidRow(daoRow)) return false;
-            getVisitor().visit(daoRow);
+            if (!DAORowUtil.isValidRow(daoRow)) {
+                getVisitor().setRowConversionStatus(daoRowNumBase + daoRowCount++, 
+                        false);
+                return false;
+            }
+            getVisitor().setRowConversionStatus(daoRowNumBase + daoRowCount++, 
+                                                    getVisitor().visit(daoRow));
         }
         return true;
     }
@@ -113,7 +121,7 @@ abstract class AbstractLoadAction extends AbstractAction {
     }
 
     @Override
-    protected DAOLoadVisitor getVisitor() {
+    public DAOLoadVisitor getVisitor() {
         return (DAOLoadVisitor)super.getVisitor();
     }
 

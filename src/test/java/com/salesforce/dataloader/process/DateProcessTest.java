@@ -70,7 +70,9 @@ public class DateProcessTest extends ProcessTestBase {
     public static Collection<Object[]> getTestParameters() {
         return Arrays.asList(
                 TestVariant.defaultSettings(),
-                TestVariant.forSettings(TestSetting.BULK_API_ENABLED));
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED),
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_CACHE_DAO_UPLOAD_ENABLED)
+                );
 
     }
 
@@ -105,7 +107,7 @@ public class DateProcessTest extends ProcessTestBase {
 
     @Test
     public void testDateWithTimeZone() throws Exception {
-        runProcess(getTestConfig(OperationInfo.insert, false), 1);
+        runProcess(getTestConfig(OperationInfo.insert, false), 2);
         QueryResult qr = getBinding().query("select CustomDateTime__c from Account where AccountNumber__c='ACCT_0'");
         assertEquals(1, qr.getSize());
 

@@ -38,6 +38,7 @@ import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.dao.*;
 import com.salesforce.dataloader.exception.*;
 import com.salesforce.dataloader.mapping.SOQLMapper;
+import com.salesforce.dataloader.util.AppUtil;
 
 /**
  * Parent class for all extract dataloader actions.
@@ -45,7 +46,7 @@ import com.salesforce.dataloader.mapping.SOQLMapper;
  * @author Colin jarvis
  * @since 21.0
  */
-abstract class AbstractExtractAction extends AbstractAction {
+abstract public class AbstractExtractAction extends AbstractAction {
 
     protected AbstractExtractAction(Controller controller, ILoaderProgress monitor)
             throws DataAccessObjectInitializationException {
@@ -60,7 +61,7 @@ abstract class AbstractExtractAction extends AbstractAction {
 
     @Override
     protected boolean writeStatus() {
-        return getConfig().getBoolean(Config.ENABLE_EXTRACT_STATUS_OUTPUT);
+        return getConfig().getBoolean(Config.LIMIT_OUTPUT_TO_QUERY_FIELDS) && getConfig().getBoolean(Config.ENABLE_EXTRACT_STATUS_OUTPUT);
     }
 
     @Override
@@ -80,11 +81,11 @@ abstract class AbstractExtractAction extends AbstractAction {
     }
 
     @Override
-    protected IQueryVisitor getVisitor() {
+    public IQueryVisitor getVisitor() {
         return (IQueryVisitor)super.getVisitor();
     }
 
-    private List<String> getDaoColumns() {
+    private List<String> getDaoColumnsFromMapper() {
         ((SOQLMapper)getController().getMapper()).initSoqlMapping(getConfig().getString(Config.EXTRACT_SOQL));
         return ((SOQLMapper)getController().getMapper()).getDaoColumnsForSoql();
     }
@@ -99,7 +100,7 @@ abstract class AbstractExtractAction extends AbstractAction {
         }
 
         // normalize the SOQL string and find the field list
-        final String trimmedSoql = soql.trim().replaceAll("[\\s]*,[\\s]*", ",");
+        final String trimmedSoql = soql.trim().replaceAll("[\\s]*,[\\s]*", AppUtil.COMMA);
         final String upperSOQL = trimmedSoql.toUpperCase();
         final int selectPos = upperSOQL.indexOf("SELECT ");
         if (selectPos == -1) {
@@ -112,7 +113,7 @@ abstract class AbstractExtractAction extends AbstractAction {
 
         try {
             final String fieldString = trimmedSoql.substring(fieldListStart, fieldListEnd).trim();
-            final String[] fields = fieldString.split(","); //$NON-NLS-1$
+            final String[] fields = fieldString.split(AppUtil.COMMA); //$NON-NLS-1$
             return new ArrayList<String>(Arrays.asList(fields));
         } catch (final Exception e) {
             String errMsg;
@@ -130,14 +131,20 @@ abstract class AbstractExtractAction extends AbstractAction {
 
     @Override
     protected List<String> getStatusColumns() throws ExtractException {
-        return getDaoColumns();
+        return getDaoColumnsFromMapper();
     }
 
     @Override
     protected void initOperation() throws DataAccessObjectInitializationException, OperationException {
-        // get columns that will be output from the query and open the outputs
-        final List<String> daoColumns = getDaoColumns();
-        getDao().setColumnNames(daoColumns);
+        ((SOQLMapper)getController().getMapper()).clearMap();
+        if (getController().getConfig().getBoolean(Config.LIMIT_OUTPUT_TO_QUERY_FIELDS)) {
+            final List<String> daoColumns = getDaoColumnsFromMapper();
+            getDao().setColumnNames(daoColumns);
+        } else {
+            // check for syntactical correctness and presence of nested soql.
+            // nested soql is currently not supported.
+            ((SOQLMapper)getController().getMapper()).parseSoql(getConfig().getString(Config.EXTRACT_SOQL));
+        }
     }
 
     @Override

@@ -26,10 +26,14 @@
 package com.salesforce.dataloader.dyna;
 
 import org.apache.commons.beanutils.ConvertUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import com.salesforce.dataloader.client.DescribeRefObject;
+import com.salesforce.dataloader.client.ReferenceEntitiesDescribeMap;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.exception.ParameterLoadException;
+import com.salesforce.dataloader.exception.RelationshipFormatException;
 import com.sforce.soap.partner.Field;
 import com.sforce.soap.partner.sobject.SObject;
 
@@ -42,6 +46,7 @@ import com.sforce.soap.partner.sobject.SObject;
 public class SObjectReference {
 
     private final Object referenceExtIdValue;
+    private static final Logger logger = LogManager.getLogger(SObjectReference.class);
 
     /**
      * @param refValue
@@ -59,21 +64,26 @@ public class SObjectReference {
      */
     public void addReferenceToSObject(Controller controller, SObject sObj, String refFieldName) throws ParameterLoadException {
         // break the name into relationship and field name components
-        ObjectField refField = new ObjectField(refFieldName);
-        String relationshipName = refField.getObjectName();
-        String fieldName = refField.getFieldName();
+        ParentIdLookupFieldFormatter refField;
+        try {
+            refField = new ParentIdLookupFieldFormatter(refFieldName);
+        } catch (RelationshipFormatException e) {
+            logger.error(e.getMessage());
+            return;
+        }
+        String relationshipName = refField.getParent().getRelationshipName();
+        String parentFieldName = refField.getParentFieldName();
 
-        // get object info for the given reference (foreign key) relationship
-        DescribeRefObject entityRefInfo = controller.getReferenceDescribes().get(relationshipName);
+        DescribeRefObject entityRefInfo = controller.getReferenceDescribes().getParentSObject(refField.getParent().toString());
 
         // build the reference SObject
         SObject sObjRef = new SObject();
         // set entity type, has to be set before all others
-        sObjRef.setType(entityRefInfo.getObjectName());
-        // set external id, do type conversion as well
-        Class typeClass = SforceDynaBean.getConverterClass(entityRefInfo.getFieldInfoMap().get(fieldName));
+        sObjRef.setType(entityRefInfo.getParentObjectName());
+        // set idLookup, do type conversion as well
+        Class<?> typeClass = SforceDynaBean.getConverterClass(entityRefInfo.getParentObjectFieldMap().get(parentFieldName));
         Object extIdValue = ConvertUtils.convert(this.referenceExtIdValue.toString(), typeClass);
-        sObjRef.setField(fieldName, extIdValue);
+        sObjRef.setField(parentFieldName, extIdValue);
         // Add the sObject reference as a child elemetn, name set to relationshipName
         sObj.addField(relationshipName, sObjRef);
     }
@@ -100,8 +110,14 @@ public class SObjectReference {
     }
 
     public static String getRelationshipField(Controller controller, String refFieldName) {
-        final String relName = new ObjectField(refFieldName).getObjectName();
-        controller.getReferenceDescribes().get(relName).getFieldInfoMap();
+        String relName;
+        try {
+            relName = new ParentIdLookupFieldFormatter(refFieldName).getParent().getRelationshipName();
+        } catch (RelationshipFormatException e) {
+            logger.error(e.getMessage());
+            return null;
+        }
+        controller.getReferenceDescribes().getParentSObject(relName).getParentObjectFieldMap();
         for (Field f : controller.getFieldTypes().getFields()) {
             if (f != null) {
                 if (relName.equals(f.getRelationshipName())) { return f.getName(); }

@@ -31,15 +31,23 @@ import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.model.LoginCriteria;
 import com.salesforce.dataloader.util.ExceptionUtil;
+import com.sforce.soap.partner.PartnerConnection;
+import com.sforce.soap.partner.QueryResult;
 import com.sforce.soap.partner.fault.LoginFault;
 import com.sforce.soap.partner.fault.UnexpectedErrorFault;
+import com.sforce.soap.partner.sobject.SObject;
+import com.sforce.ws.ConnectionException;
+import com.sforce.ws.bind.XmlObject;
+
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 
 import org.eclipse.swt.custom.BusyIndicator;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 
+import java.util.Iterator;
 import java.util.function.Consumer;
 
 /**
@@ -81,34 +89,72 @@ public class AuthenticationRunner {
 
     private void loginAsync(){
         try {
-            messenger.accept(Labels.getString("SettingsPage.verifyingLogin"));
+            messenger.accept(Labels.getString("LoginPage.verifyingLogin"));
 
-            if (criteria.getMode() == LoginCriteria.Default){
+            if ((criteria.getMode() == LoginCriteria.OAuthLoginDefault)
+            	&& config.getBoolean(Config.OAUTH_LOGIN_FROM_BROWSER)
+            	&& config.getString(Config.OAUTH_CLIENTID) != null
+            	&& !config.getString(Config.OAUTH_CLIENTID).isEmpty()) {
+            	LoginCriteria existingCriteria = criteria;
+            	criteria = new LoginCriteria(LoginCriteria.OAuthLoginFromBrowser);
+            	criteria.setEnvironment(existingCriteria.getEnvironment());
+            	criteria.setInstanceUrl(existingCriteria.getInstanceUrl());
+            	criteria.setUserName(existingCriteria.getUserName());
+            	criteria.setPassword(existingCriteria.getPassword());
+            }
+            if (criteria.getMode() == LoginCriteria.OAuthLoginDefault){
 
                 boolean hasSecret = !config.getString(Config.OAUTH_CLIENTSECRET).trim().equals("");
                 OAuthFlow flow = hasSecret ? new OAuthSecretFlow(shell, config) : new OAuthTokenFlow(shell, config);
                 if (!flow.open()){
-                    String message = Labels.getString("SettingsPage.invalidLogin");
+                    String message = Labels.getString("LoginPage.invalidLogin");
                     if (flow.getStatusCode() == DefaultSimplePost.PROXY_AUTHENTICATION_REQUIRED) {
-                        message = Labels.getFormattedString("SettingsPage.proxyError", flow.getReasonPhrase());
+                        message = Labels.getFormattedString("LoginPage.proxyError", flow.getReasonPhrase());
                     }
 
-                    logger.info("Login failed:" + flow.getReasonPhrase());
+                    if (flow.getReasonPhrase() == null) {
+                        logger.info("OAuth login dialog closed without logging in");
+                    } else {
+                        logger.info("Login failed:" + flow.getReasonPhrase());
+                    }
                     messenger.accept(message);
                     complete.accept(false);
                     return;
                 }
+            } else if (criteria.getMode() == LoginCriteria.OAuthLoginFromBrowser) {
+            	OAuthLoginFromBrowserFlow flow = new OAuthLoginFromBrowserFlow(shell, config);
+            	if (!flow.open()) {
+	                String message = Labels.getString("LoginPage.invalidLogin");
+	                messenger.accept(message);
+	                complete.accept(false);
+	                return;
+            	}
             }
-            if (controller.login() && controller.setEntityDescribes()) {
-                messenger.accept(Labels.getString("SettingsPage.loginSuccessful"));
+            if (controller.login() && controller.getEntityDescribes() != null) {
+                messenger.accept(Labels.getString("LoginPage.loginSuccessful"));
                 controller.saveConfig();
+                controller.updateLoaderWindowTitleAndCacheUserInfoForTheSession();
+                PartnerConnection conn = controller.getPartnerClient().getConnection();
+                logger.debug("org_id = " + conn.getUserInfo().getOrganizationId());
+                logger.debug("user_id = " + conn.getUserInfo().getUserId());
+                if (logger.getLevel() == Level.DEBUG) { 
+                    // avoid making a remote API call to the server unless log level is DEBUG
+                    logger.debug(getSoqlResultsAsString(
+                            "\nConnected App Information: ",
+                            "SELECT Name, id FROM ConnectedApplication WHERE name like 'Dataloader%'"
+                                    , conn));
+                    logger.debug(getSoqlResultsAsString(
+                            "\nOrg Instance Information:",
+                            "SELECT InstanceName FROM Organization"
+                                    , conn));
+                    }
                 complete.accept(true);
             } else {
-                messenger.accept(Labels.getString("SettingsPage.invalidLogin"));
+                messenger.accept(Labels.getString("LoginPage.invalidLogin"));
                 complete.accept(false);
             }
         } catch (LoginFault lf ) {
-            messenger.accept(Labels.getString("SettingsPage.invalidLogin"));
+            messenger.accept(Labels.getString("LoginPage.invalidLogin"));
             complete.accept(false);
         } catch (UnexpectedErrorFault e) {
             handleError(e, e.getExceptionMessage());
@@ -116,10 +162,42 @@ public class AuthenticationRunner {
             handleError(e, e.getMessage());
         }
     }
+        
+    private String getSoqlResultsAsString(String prefix, String soql, PartnerConnection conn) throws ConnectionException {
+        QueryResult result = conn.query(soql);
+        final SObject[] sfdcResults = result.getRecords();
+        String debugInfo = prefix;
+        if (sfdcResults != null) {
+            for (SObject sobj : sfdcResults) {
+                Iterator<XmlObject> fields = sobj.getChildren();
+                if (fields == null) continue;
+                String fieldsStr = "    ";
+                boolean isIdInFields = false;
+                while (fields.hasNext()) {
+                    XmlObject field = fields.next();
+                    if ("type".equalsIgnoreCase(field.getName().getLocalPart())) {
+                        continue;
+                    }
+                    if (field.getValue() == null || field.getValue().toString().isBlank()) {
+                        continue;
+                    }
+                    if ("id".equalsIgnoreCase(field.getName().getLocalPart())) {
+                        if (isIdInFields) {
+                            continue;
+                        }
+                        isIdInFields = true;
+                    }
+                    fieldsStr += field.getName().getLocalPart() + " = " + field.getValue() + "  ";
+                }
+                debugInfo += "\n" + fieldsStr;
+            }
+        }
+        return debugInfo;
+    }
 
     private void handleError(Throwable e, String message) {
         if (message == null || message.length() < 1) {
-            messenger.accept(Labels.getString("SettingsPage.invalidLogin"));
+            messenger.accept(Labels.getString("LoginPage.invalidLogin"));
         } else {
             int x = message.indexOf(nestedException);
             if (x >= 0) {

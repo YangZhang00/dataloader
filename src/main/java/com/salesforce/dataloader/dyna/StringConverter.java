@@ -50,34 +50,7 @@ public final class StringConverter implements Converter {
     // ----------------------------------------------------------- Constructors
 
     public StringConverter() {
-
-        this.defaultValue = null;
-        this.useDefault = false;
-
     }
-
-    public StringConverter(Object defaultValue) {
-
-        this.defaultValue = defaultValue;
-        this.useDefault = true;
-
-    }
-
-
-    // ----------------------------------------------------- Instance Variables
-
-
-    /**
-     * The default value specified to our Constructor, if any.
-     */
-    private Object defaultValue = null;
-
-
-    /**
-     * Should we return the default value on conversion errors?
-     */
-    private boolean useDefault = true;
-
 
     // --------------------------------------------------------- Public Methods
 
@@ -93,6 +66,7 @@ public final class StringConverter implements Converter {
      *  successfully
      */
     @Override
+    @SuppressWarnings({ "rawtypes", "unchecked" })
     public Object convert(Class type, Object value) {
 
         if (value == null || String.valueOf(value).isEmpty()) {
@@ -118,11 +92,7 @@ public final class StringConverter implements Converter {
         try {
             return cleanseString(value.toString());
         } catch (ClassCastException e) {
-            if (useDefault) {
-                return (defaultValue);
-            } else {
-                throw new ConversionException(e);
-            }
+            throw new ConversionException(e);
         }
 
     }
@@ -156,6 +126,10 @@ public final class StringConverter implements Converter {
             default:
                 if (((c >= 0x20) && (c <= 0xD7FF)) || ((c >= 0xE000) && (c <= 0xFFFD))) {
                     buff.append(c);
+                } else if (Character.isHighSurrogate(c) && (i + 1) < value.length() && Character.isLowSurrogate(value.charAt(i + 1))) {
+                    buff.append(c);
+                    buff.append(value.charAt(i + 1));
+                    i++;
                 }
                 // For chars outside these ranges (such as control chars),
                 // do nothing; it's not legal XML to print these chars,

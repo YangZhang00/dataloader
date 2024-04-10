@@ -33,7 +33,6 @@ import java.lang.reflect.InvocationTargetException;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
-import org.eclipse.jface.dialogs.ProgressMonitorDialog;
 import org.eclipse.swt.SWT;
 
 import com.salesforce.dataloader.action.OperationInfo;
@@ -75,7 +74,7 @@ public abstract class LoadWizard extends BaseWizard {
         String outputDirName = getFinishPage().getOutputDir();
         File statusDir = new File(outputDirName);
         if (!statusDir.exists() || !statusDir.isDirectory()) {
-            UIUtils.errorMessageBox(getShell(), Labels.getString("LoadWizard.errorValidDirectory")); //$NON-NLS-1$
+            UIUtils.errorMessageBox(getShell(), Labels.getString("LoadWizard.errorValidFolder")); //$NON-NLS-1$
             return false;
         }
         // set the files for status output
@@ -94,7 +93,7 @@ public abstract class LoadWizard extends BaseWizard {
         if (!wizardhook_validateFinish()) { return false; }
 
         try {
-            ProgressMonitorDialog dlg = new ProgressMonitorDialog(getShell());
+            DLProgressMonitorDialog dlg = new DLProgressMonitorDialog(getShell());
             dlg.run(true, true, new SWTLoadRunable(getController()));
 
         } catch (InvocationTargetException e) {
@@ -107,7 +106,7 @@ public abstract class LoadWizard extends BaseWizard {
             return false;
         }
 
-        return true;
+        return closeWizardPagePostSuccessfulFinish();
     }
 
     @Override
@@ -126,8 +125,8 @@ public abstract class LoadWizard extends BaseWizard {
     }
 
     @Override
-    protected SettingsPage createSettingsPage() {
-        return new SettingsPage(getController());
+    protected LoginPage createLoginPage() {
+        return new LoginPage(getController());
     }
 
     protected FinishPage createFinishPage() {
@@ -142,7 +141,9 @@ public abstract class LoadWizard extends BaseWizard {
     protected void hook_additionalLoadWizardPages() {}
 
     private String getConfirmationText() {
-        return getLabel("confFirstLine") + System.getProperty("line.separator") //$NON-NLS-1$ //$NON-NLS-2$
+        return getLabel("confFirstLine") 
+                + System.getProperty("line.separator") //$NON-NLS-1$ //$NON-NLS-2$
+                + System.getProperty("line.separator") //$NON-NLS-1$ //$NON-NLS-2$
                 + getLabel("confSecondLine"); //$NON-NLS-1$
     }
 
@@ -156,6 +157,12 @@ public abstract class LoadWizard extends BaseWizard {
             int button = UIUtils.warningConfMessageBox(getShell(), getLabel("validateFirstLine") //$NON-NLS-1$
                     + System.getProperty("line.separator") + getLabel("validateSecondLine")); //$NON-NLS-1$ //$NON-NLS-2$
             return button == SWT.YES;
+        }
+    }
+    
+    public static final class UndeleteWizard extends LoadWizard {
+        public UndeleteWizard(Controller controller) {
+            super(controller, OperationInfo.undelete);
         }
     }
 
@@ -174,6 +181,12 @@ public abstract class LoadWizard extends BaseWizard {
         public UpdateWizard(Controller controller) {
             super(controller, OperationInfo.update);
         }
+        
+        @Override
+        protected void hook_additionalLoadWizardPages() {
+            super.hook_additionalLoadWizardPages();
+            addPage(new ChooseLookupFieldForRelationshipPage(getController()));
+        }
     }
 
     public static final class UpsertWizard extends LoadWizard {
@@ -185,13 +198,19 @@ public abstract class LoadWizard extends BaseWizard {
         protected void hook_additionalLoadWizardPages() {
             super.hook_additionalLoadWizardPages();
             addPage(new ExternalIdPage(getController()));
-            addPage(new ForeignKeyExternalIdPage(getController()));
+            addPage(new ChooseLookupFieldForRelationshipPage(getController()));
         }
     }
 
     public static final class InsertWizard extends LoadWizard {
         public InsertWizard(Controller controller) {
             super(controller, OperationInfo.insert);
+        }
+        
+        @Override
+        protected void hook_additionalLoadWizardPages() {
+            super.hook_additionalLoadWizardPages();
+            addPage(new ChooseLookupFieldForRelationshipPage(getController()));
         }
     }
 

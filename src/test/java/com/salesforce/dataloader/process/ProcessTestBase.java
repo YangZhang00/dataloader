@@ -32,22 +32,30 @@ import java.io.*;
 import java.util.*;
 
 import org.apache.logging.log4j.Logger;
+import org.apache.commons.beanutils.BasicDynaClass;
+import org.apache.commons.beanutils.BeanUtils;
+import org.apache.commons.beanutils.DynaBean;
+import org.apache.commons.beanutils.DynaProperty;
 import org.apache.logging.log4j.LogManager;
-
 import org.junit.Assert;
-import org.junit.Before;
 
 import com.salesforce.dataloader.*;
 import com.salesforce.dataloader.action.OperationInfo;
+import com.salesforce.dataloader.action.progress.ILoaderProgress;
+import com.salesforce.dataloader.client.HttpClientTransport;
+import com.salesforce.dataloader.client.PartnerClient;
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.dao.DataAccessObjectFactory;
 import com.salesforce.dataloader.dao.csv.CSVFileReader;
 import com.salesforce.dataloader.dao.csv.CSVFileWriter;
+import com.salesforce.dataloader.dyna.SforceDynaBean;
 import com.salesforce.dataloader.exception.*;
 import com.salesforce.dataloader.exception.UnsupportedOperationException;
 import com.salesforce.dataloader.model.Row;
+import com.salesforce.dataloader.util.AppUtil;
 import com.salesforce.dataloader.util.Base64;
+import com.salesforce.dataloader.action.progress.NihilistProgressAdapter;
 import com.sforce.soap.partner.*;
 import com.sforce.soap.partner.fault.ApiFault;
 import com.sforce.soap.partner.sobject.SObject;
@@ -62,26 +70,22 @@ import com.sforce.ws.util.FileUtil;
  */
 public abstract class ProcessTestBase extends ConfigTestBase {
 
-    private static Logger logger = LogManager.getLogger(TestBase.class);
+    private static Logger logger = LogManager.getLogger(ProcessTestBase.class);
+    private int serverApiInvocationThreshold = 100;
 
     protected ProcessTestBase() {
         super(Collections.<String, String>emptyMap());
+        HttpClientTransport.resetServerInvocationCount();
     }
 
     protected ProcessTestBase(Map<String, String> config) {
         super(config);
-    }
-
-    @Before
-    public void cleanRecords() {
-        // cleanup the records that might've been created on previous tests
-        deleteSfdcRecords("Account", ACCOUNT_WHERE_CLAUSE, 0);
-        deleteSfdcRecords("Contact", CONTACT_WHERE_CLAUSE, 0);
+        HttpClientTransport.resetServerInvocationCount();
     }
 
     protected void verifyErrors(Controller controller, String expectedErrorMessage) throws DataAccessObjectException {
         String fileName = controller.getConfig().getString(Config.OUTPUT_ERROR);
-        final CSVFileReader errReader = new CSVFileReader(fileName, controller);
+        final CSVFileReader errReader = new CSVFileReader(new File(fileName), getController().getConfig(), true, false);
         try {
             errReader.open();
             for (Row errorRow : errReader.readRowList(errReader.getTotalRows())) {
@@ -101,7 +105,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
 
     protected void verifySuccessIds(Controller ctl, Set<String> ids) throws DataAccessObjectException {
         String fileName = ctl.getConfig().getString(Config.OUTPUT_SUCCESS);
-        final CSVFileReader successRdr = new CSVFileReader(fileName, ctl);
+        final CSVFileReader successRdr = new CSVFileReader(new File(fileName), ctl.getConfig(), true, false);
         final Set<String> remaining = new HashSet<String>(ids);
         final Set<String> unexpected = new HashSet<String>();
         try {
@@ -422,7 +426,24 @@ public abstract class ProcessTestBase extends ConfigTestBase {
             }
             account.setField("AccountNumber__c", accountNumberValue);
             account.setField("AnnualRevenue", (double) 1000 * i);
-            account.setField("Phone", "415-555-" + seqStr);
+            int remainder = i % 5;
+            switch (remainder) {
+                case 0:
+                    account.setField("Phone", "+1415555" + seqStr);
+                    break;
+                case 1:
+                    account.setField("Phone", "415555" + seqStr);
+                    break;
+                case 2:
+                    account.setField("Phone", "1415555" + seqStr);
+                    break;
+                case 3:  // length less than 10
+                    account.setField("Phone", "14155" + seqStr);
+                    break;
+                default:
+                    account.setField("Phone", "141555567" + seqStr);
+                    break;
+            }
             account.setField("WebSite", "http://www.accountInsert" + seqStr
                     + ".com");
             account.setField(DEFAULT_ACCOUNT_EXT_ID_FIELD, "1-" + seqStr);
@@ -466,6 +487,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
             contact.setField("Title", titleValue);
             contact.setField("Phone", "415-555-" + seqStr);
             contact.setField(DEFAULT_CONTACT_EXT_ID_FIELD, (double) i);
+            contact.setField("Email", "contact"+i+"@testcustomer.com");
             return contact;
         }
 
@@ -486,71 +508,34 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         }
     }
 
-    /**
-     * @param entityName
-     * @param whereClause
-     * @param retries
-     */
-    protected void deleteSfdcRecords(String entityName, String whereClause,
-            int retries) {
-        try {
-            // query for records
-            String soql = "select Id from " + entityName + " where " + whereClause;
-            logger.debug("Querying " + entityName + "s to delete with soql: " + soql);
-            int deletedCount = 0;
-            PartnerConnection conn = getBinding();
-            // now delete them 200 at a time.... we should use bulk api here
-            for (QueryResult qr = conn.query(soql); qr != null && qr.getRecords().length > 0; qr = qr.isDone() ? null
-                    : conn.queryMore(qr.getQueryLocator())) {
-                deleteSfdcRecords(qr, 0);
-                deletedCount += qr.getRecords().length;
-                logger.debug("Deleted " + deletedCount + " out of " + qr.getSize() + " total deleted records");
-            }
-            logger.info("Deleted " + deletedCount + " total objects of type " + entityName);
-        } catch (ApiFault e) {
-            if (checkBinding(++retries, e) != null) {
-                deleteSfdcRecords(entityName, whereClause, retries);
-            }
-            Assert.fail("Failed to query " + entityName + "s to delete ("
-                    + whereClause + "), error: " + e.getExceptionMessage());
-        } catch (ConnectionException e) {
-            Assert.fail("Failed to query " + entityName + "s to delete ("
-                    + whereClause + "), error: " + e.getMessage());
+    protected static class TestFieldGenerator extends AbstractSObjectGenerator {
+        /**
+         * @param i
+         * @return SObject contact
+         */
+        @Override
+        public SObject getObject(int i, boolean negativeTest) {
+            String seqStr = String.format("%06d", i);
+            SObject testField = createSObject();
+            testField.setField("Name", TESTFIELD_FIELD_PREFIX + seqStr);
+            testField.setField("TestField__c", TESTFIELD_FIELD_PREFIX + seqStr);
+            return testField;
         }
-    }
 
-    /**
-     * @param qryResult
-     */
-    protected void deleteSfdcRecords(QueryResult qryResult, int retries) {
-        try {
-            List<String> toDeleteIds = new ArrayList<String>();
-            for (int i = 0; i < qryResult.getRecords().length; i++) {
-                SObject record = qryResult.getRecords()[i];
-                toDeleteIds.add(record.getId());
-                // when SAVE_RECORD_LIMIT records are reached or
-                // if we're on the last query result record, do the delete
-                if (i > 0 && (i + 1) % SAVE_RECORD_LIMIT == 0
-                        || i == qryResult.getRecords().length - 1) {
-                    DeleteResult[] delResults = getBinding().delete(
-                            toDeleteIds.toArray(new String[] {}));
-                    for (int j = 0; j < delResults.length; j++) {
-                        DeleteResult delResult = delResults[j];
-                        if (!delResult.getSuccess()) {
-                            logger.warn("Delete returned an error: " + delResult.getErrors()[0].getMessage(),
-                                    new RuntimeException());
-                        }
-                    }
-                    toDeleteIds.clear();
-                }
-            }
-        } catch (ApiFault e) {
-            if (checkBinding(++retries, e) != null) {
-                deleteSfdcRecords(qryResult, retries);
-            }
-            Assert.fail("Failed to delete records, error: " + e.getExceptionMessage());
-        } catch (ConnectionException e) {
-            Assert.fail("Failed to delete records, error: " + e.getMessage());
+        /*
+         * (non-Javadoc)
+         *
+         * @seecom.salesforce.dataloader.process.ProcessTestBase.SObjectGetter#
+         * getEntityName()
+         */
+        @Override
+        public String getEntityName() {
+            return "TestField__c";
+        }
+
+        @Override
+        public String getSOQL(String selectFields) {
+            return generateSOQL(selectFields, TESTFIELD_WHERE_CLAUSE);
         }
     }
 
@@ -594,7 +579,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
             TemplateListener... listeners) throws DataAccessObjectException {
 
         String fileName = new File(getTestDataDir(), templateFileName).getAbsolutePath();
-        final CSVFileReader templateReader = new CSVFileReader(fileName, getController());
+        final CSVFileReader templateReader = new CSVFileReader(new File(fileName), getController().getConfig(), true, false);
         try {
             templateReader.open();
 
@@ -622,7 +607,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
                 idx++;
             }
             final String inputPath = new File(getTestDataDir(), inputFileName).getAbsolutePath();
-            final CSVFileWriter inputWriter = new CSVFileWriter(inputPath, getController().getConfig());
+            final CSVFileWriter inputWriter = new CSVFileWriter(inputPath, getController().getConfig(), AppUtil.COMMA);
             try {
                 inputWriter.open();
                 inputWriter.setColumnNames(templateReader.getColumnNames());
@@ -652,7 +637,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         res.put(Config.DAO_TYPE, isExtraction ? DataAccessObjectFactory.CSV_WRITE_TYPE
                 : DataAccessObjectFactory.CSV_READ_TYPE);
         res.put(Config.OUTPUT_STATUS_DIR, getTestStatusDir());
-        String apiType = isBulkAPIEnabled(res) ? "Bulk" : "Soap";
+        String apiType = isBulkAPIEnabled(res) || isBulkV2APIEnabled(res) ? "Bulk" : "Soap";
         res.put(Config.OUTPUT_SUCCESS, getSuccessFilePath(apiType));
         res.put(Config.OUTPUT_ERROR, getErrorFilePath(apiType));
 
@@ -708,20 +693,42 @@ public abstract class ProcessTestBase extends ConfigTestBase {
 
     protected Controller runProcessNegative(Map<String, String> args, String failureMessage)
             throws ProcessInitializationException, DataAccessObjectException {
-        return runProcess(args, false, failureMessage, 0, 0, 0, false);
+        Controller controller = null;
+        try {
+            controller = runProcess(args, false, failureMessage, 0, 0, 0, false);
+        } catch (RuntimeException ex) {
+            // ignore
+        }
+        return controller;
+    }
+    
+    protected IProcess runBatchProcess(Map<String, String> argMap) {
+        if (argMap == null) argMap = getTestConfig();
+        argMap.put(Config.PROCESS_THREAD_NAME, this.baseName);
+        argMap.put(Config.READ_ONLY_CONFIG_PROPERTIES, Boolean.TRUE.toString());
+
+        // emulate invocation through process.bat script
+        String[] args = new String[argMap.size()+1];
+        args[0] = getTestConfDir();
+        int i = 1;
+        if (argMap.containsKey(Config.PROCESS_NAME)) {
+            args[i++] = argMap.get(Config.PROCESS_NAME);
+            argMap.remove(Config.PROCESS_NAME);
+        }
+        for (Map.Entry<String, String> entry: argMap.entrySet())
+        {
+            args[i++] = entry.getKey() + "=" + entry.getValue();
+        }
+        this.getBinding(); // establish the test connection if not done so already
+        final NihilistProgressAdapter monitor = new NihilistProgressAdapter();
+        return DataLoaderRunner.runApp(args, monitor);
     }
 
     protected Controller runProcess(Map<String, String> argMap, boolean expectProcessSuccess, String failMessage,
             int numInserts, int numUpdates, int numFailures, boolean emptyId) throws ProcessInitializationException,
             DataAccessObjectException {
-
-        if (argMap == null) argMap = getTestConfig();
-
-        final ProcessRunner runner = ProcessRunner.getInstance(argMap);
-        runner.setName(this.baseName);
-
-        final TestProgressMontitor monitor = new TestProgressMontitor();
-        runner.run(monitor);
+        IProcess runner = runBatchProcess(argMap);
+        ILoaderProgress monitor = runner.getMonitor();
         Controller controller = runner.getController();
 
         // verify process completed as expected
@@ -731,7 +738,8 @@ public abstract class ProcessTestBase extends ConfigTestBase {
             assertTrue("Process failed: " + actualMessage, monitor.isSuccess());
             verifyFailureFile(controller, numFailures);        //A.S.: To be removed and replaced
             verifySuccessFile(controller, numInserts, numUpdates, emptyId);
-
+            long serverAPIInvocations = HttpClientTransport.getServerInvocationCount();
+            assertTrue("Number of server invocations (" + serverAPIInvocations + ") have exceeded the threshold of " + serverApiInvocationThreshold, serverAPIInvocations <= serverApiInvocationThreshold);
         } else {
             assertFalse("Expected process to fail but got success: " + actualMessage, monitor.isSuccess());
         }
@@ -744,6 +752,10 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         // return the controller used by the process so that the tests can validate success/error output files, etc
         return controller;
     }
+    
+    protected void setServerApiInvocationThreshold(int threshold) {
+        serverApiInvocationThreshold = threshold;
+    }
 
     private static final String INSERT_MSG = "Item Created";
     private static final Map<OperationInfo, String> UPDATE_MSGS;
@@ -751,6 +763,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
     static {
         UPDATE_MSGS = new EnumMap<OperationInfo, String>(OperationInfo.class);
         UPDATE_MSGS.put(OperationInfo.delete, "Item Deleted");
+        UPDATE_MSGS.put(OperationInfo.undelete, "Item Undeleted");
         UPDATE_MSGS.put(OperationInfo.hard_delete, "Item Hard Deleted");
         UPDATE_MSGS.put(OperationInfo.upsert, "Item Updated");
         UPDATE_MSGS.put(OperationInfo.update, "Item Updated");
@@ -764,24 +777,39 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         final String successFile = ctl.getConfig().getStringRequired(Config.OUTPUT_SUCCESS);
         //final String suceessFule2 = ctl.getConfig().
         assertNumRowsInCSVFile(successFile, numInserts + numUpdates);
+        boolean isBulkV2Operation = ctl.getConfig().isBulkV2APIEnabled();
 
         Row row = null;
-        CSVFileReader rdr = new CSVFileReader(successFile, getController());
-        String updateMsg = UPDATE_MSGS.get(ctl.getConfig().getOperationInfo());
+        CSVFileReader rdr = new CSVFileReader(new File(successFile), getController().getConfig(), true, false);
+        String expectedUpdateStatusVal = UPDATE_MSGS.get(ctl.getConfig().getOperationInfo());
+        String expectedInsertStatusVal = INSERT_MSG;
+        if (isBulkV2Operation && !ctl.getConfig().getOperationInfo().isExtraction()) {
+            expectedInsertStatusVal = "true";
+            expectedUpdateStatusVal = "false";
+        }
         int insertsFound = 0;
         int updatesFound = 0;
         while ((row = rdr.readRow()) != null) {
-            String id = (String)row.get("ID");
+            String id = (String)row.get(Config.ID_COLUMN_NAME);
+            if (id == null) {
+                id = (String)row.get(Config.ID_COLUMN_NAME_IN_BULKV2);
+            }
             if (emptyId) assertEquals("Expected empty id", "", id);
             else
                 assertValidId(id);
-            String status = (String)row.get("STATUS");
-            if (INSERT_MSG.equals(status))
+            String statusValForRow = (String)row.get(Config.STATUS_COLUMN_NAME);
+            
+            // status column for Bulk v2 upload operation is different from that for all Bulk v1 operations
+            // and Bulk v2 extract operation
+            if (isBulkV2Operation && !ctl.getConfig().getOperationInfo().isExtraction()) {
+                statusValForRow = (String)row.get(Config.STATUS_COLUMN_NAME_IN_BULKV2);
+            }
+            if (expectedInsertStatusVal.equals(statusValForRow))
                 insertsFound++;
-            else if (updateMsg.equals(status))
+            else if (expectedUpdateStatusVal.equals(statusValForRow))
                 updatesFound++;
             else
-                Assert.fail("unrecognized status: " + status);
+                Assert.fail("unrecognized status: " + statusValForRow);
         }
         assertEquals("Wrong number of inserts in success file: " + successFile, numInserts, insertsFound);
         assertEquals("Wrong number of updates in success file: " + successFile, numUpdates, updatesFound);
@@ -873,16 +901,21 @@ public abstract class ProcessTestBase extends ConfigTestBase {
     }
 
     private void assertNumRowsInCSVFile(String fName, int expectedRows) throws DataAccessObjectException {
-        CSVFileReader rdr = new CSVFileReader(fName, getController());
+        CSVFileReader rdr = new CSVFileReader(new File(fName), getController().getConfig(), true, false);
         rdr.open();
         int actualRows = rdr.getTotalRows();
         assertEquals("Wrong number of rows in file :" + fName, expectedRows, actualRows);
     }
 
     protected boolean isBulkAPIEnabled(Map<String, String> argMap) {
-        return isSettingEnabled(argMap, Config.BULK_API_ENABLED);
+        return isSettingEnabled(argMap, Config.BULK_API_ENABLED)
+                && !isSettingEnabled(argMap, Config.BULKV2_API_ENABLED);
     }
-
+    
+    protected boolean isBulkV2APIEnabled(Map<String, String> argMap) {
+        return isSettingEnabled(argMap, Config.BULK_API_ENABLED)
+                && isSettingEnabled(argMap, Config.BULKV2_API_ENABLED);
+    }
     protected boolean isSettingEnabled(Map<String, String> argMap, String configKey) {
         return Config.TRUE.equalsIgnoreCase(argMap.get(configKey));
     }
@@ -921,4 +954,98 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         return argMap;
     }
 
+    protected Map<String, String> getTestConfig() {
+        Map<String, String> configArgsMap = super.getTestConfig();
+        // run process tests in batch mode
+        configArgsMap.put(Config.CLI_OPTION_RUN_MODE, Config.RUN_MODE_BATCH_VAL);
+        return configArgsMap;
+    }
+    
+
+    protected UpsertResult[] doUpsert(String entity, Map<String, Object> sforceMapping) throws Exception {
+        // now convert to a dynabean array for the client
+        // setup our dynabeans
+        BasicDynaClass dynaClass = setupDynaClass(entity);
+
+        DynaBean sforceObj = dynaClass.newInstance();
+
+        // This does an automatic conversion of types.
+        BeanUtils.copyProperties(sforceObj, sforceMapping);
+
+        List<DynaBean> beanList = new ArrayList<DynaBean>();
+        beanList.add(sforceObj);
+
+        // get the client and make the insert call
+        PartnerClient client = new PartnerClient(getController());
+        UpsertResult[] results = client.loadUpserts(beanList);
+        for (UpsertResult result : results) {
+            if (!result.getSuccess()) {
+                Assert.fail("Upsert returned an error: " + result.getErrors()[0].getMessage());
+            }
+        }
+        return results;
+    }
+    
+    /**
+     * Make sure to set external id field
+     */
+    protected String setExtIdField(String extIdField) {
+        getController().getConfig().setValue(Config.EXTERNAL_ID_FIELD, extIdField);
+        return extIdField;
+    }
+
+    /**
+     * Get a random account external id for upsert testing
+     * 
+     * @param entity
+     *            TODO
+     * @param whereClause
+     *            TODO
+     * @param prevValue
+     *            Indicate that the value should be different from the specified
+     *            value or null if uniqueness not required
+     * @return String Account external id value
+     */
+    protected Object getRandomExtId(String entity, String whereClause, Object prevValue) throws ConnectionException {
+
+        // insert couple of accounts so there're at least two records to work with
+        upsertSfdcRecords(entity, 2);
+
+        // get the client and make the query call
+        String extIdField = getController().getConfig().getString(Config.EXTERNAL_ID_FIELD);
+        PartnerClient client = new PartnerClient(getController());
+        // only get the records that have external id set, avoid nulls
+        String soql = "select " + extIdField + " from " + entity + " where " + whereClause + " and " + extIdField
+                + " != null";
+        if (prevValue != null) {
+            soql += " and "
+                    + extIdField
+                    + "!= "
+                    + (prevValue.getClass().equals(String.class) ? ("'" + prevValue + "'") : String
+                            .valueOf(prevValue));
+        }
+        QueryResult result = client.query(soql);
+        SObject[] records = result.getRecords();
+        assertNotNull("Operation should return non-null values", records);
+        assertTrue("Operation should return 1 or more records", records.length > 0);
+        assertNotNull("Records should have non-null field: " + extIdField + " values", records[0]
+                .getField(extIdField));
+
+        return records[0].getField(extIdField);
+    }
+    
+    protected BasicDynaClass setupDynaClass(String entity) throws ConnectionException {
+        getController().getConfig().setValue(Config.ENTITY, entity);
+        PartnerClient client = getController().getPartnerClient();
+        if (!client.isLoggedIn()) {
+            client.connect();
+        }
+
+        getController().setFieldTypes();
+        getController().setReferenceDescribes();
+        DynaProperty[] dynaProps = SforceDynaBean.createDynaProps(getController().getPartnerClient().getFieldTypes(), getController());
+        BasicDynaClass dynaClass = SforceDynaBean.getDynaBeanInstance(dynaProps);
+        SforceDynaBean.registerConverters(getController().getConfig());
+        return dynaClass;
+    }
 }

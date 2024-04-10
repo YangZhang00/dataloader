@@ -67,7 +67,9 @@ public class CsvProcessWithOffsetTest extends ProcessTestBase {
     public static Collection<Object[]> getTestParameters() {
         return Arrays.asList(
                 TestVariant.defaultSettings(),
-                TestVariant.forSettings(TestSetting.BULK_API_ENABLED));
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED),
+                TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_API_CACHE_DAO_UPLOAD_ENABLED)
+                );
     }
 
     /**
@@ -219,7 +221,7 @@ public class CsvProcessWithOffsetTest extends ProcessTestBase {
 
     private CSVFileReader openConfiguredPath(Config cfg, String configSetting)
             throws DataAccessObjectInitializationException {
-        final CSVFileReader rdr = new CSVFileReader(new File(cfg.getString(configSetting)), cfg);
+        final CSVFileReader rdr = new CSVFileReader(new File(cfg.getString(configSetting)), cfg, false, false);
         rdr.open();
         return rdr;
     }

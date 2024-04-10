@@ -30,7 +30,7 @@ import com.salesforce.dataloader.exception.DataAccessObjectException;
 import com.salesforce.dataloader.exception.DataAccessObjectInitializationException;
 import com.salesforce.dataloader.model.Row;
 import junit.framework.TestCase;
-import org.apache.commons.dbcp.BasicDataSource;
+import org.apache.commons.dbcp2.BasicDataSource;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
@@ -55,6 +55,7 @@ import java.util.Map;
  * @author Alex Warshavsky
  * @since 8.0
  */
+@SuppressWarnings("serial")
 public class DatabaseTestUtil {
 
     private static final Logger logger = LogManager.getLogger(DatabaseTestUtil.class);
@@ -77,7 +78,7 @@ public class DatabaseTestUtil {
         put(REVENUE_COL, "decimal");
         put(LAST_UPDATED_COL, "date");
         put(ACCOUNT_NUMBER_COL, "varchar(20)");
-        put("system_modstamp", "date default sysdate not null");
+        put("system_modstamp", "date default CURRENT_TIMESTAMP not null");
     }};
 
     public static void insertOrUpdateAccountsDb(Controller theController, boolean isInsert, int numAccounts, boolean insertNulls) {

@@ -25,9 +25,8 @@
  */
 package com.salesforce.dataloader.dao.database;
 
-import com.salesforce.dataloader.TestBase;
+import com.salesforce.dataloader.ConfigTestBase;
 import com.salesforce.dataloader.controller.Controller;
-import com.salesforce.dataloader.dao.database.DatabaseTestUtil.DateType;
 import com.salesforce.dataloader.exception.DataAccessObjectException;
 import com.salesforce.dataloader.model.Row;
 import com.salesforce.dataloader.util.AccountRowComparator;
@@ -38,7 +37,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.Arrays;
 import java.util.Collections;
@@ -55,7 +53,7 @@ import static org.junit.Assert.assertTrue;
  * @author Alex Warshavsky
  * @since 8.0
  */
-public class DatabaseTest extends TestBase {
+public class DatabaseTest extends ConfigTestBase {
 
     private static final Logger logger = LogManager.getLogger(DatabaseReader.class);
     
@@ -121,7 +119,7 @@ public class DatabaseTest extends TestBase {
     }
 
     private void doTestDatabaseDateMapping(DatabaseTestUtil.DateType dateType, boolean verifyDates) throws Exception {
-        List<Class<? extends Date>> dateClass = Arrays.asList(java.sql.Date.class, Time.class, Timestamp.class);
+        List<Class<? extends Date>> dateClass = Arrays.asList(java.sql.Date.class, Timestamp.class);
         for (Class<? extends Date> sqlType : dateClass) {
             try {
                 // insert some data
@@ -156,12 +154,8 @@ public class DatabaseTest extends TestBase {
                     assertTrue("Error reading data row #" + i + ": the row shouldn't be empty", readRow.size() > 0);
                     Row expectedRow = DatabaseTestUtil.getInsertOrUpdateAccountRow(isInsert, rowsProcessed, DatabaseTestUtil.DateType.VALIDATION);
                     // verify all expected data
-                    for(String colName : VALIDATE_COLS) {
-                        if(validateDates && colName.equals(DateType.DATE)) {
-                            verifyCol(DatabaseTestUtil.LAST_UPDATED_COL, readRow, expectedRow);
-                        } else {
-                            verifyCol(colName, readRow, expectedRow);
-                        }
+                    for (String colName : VALIDATE_COLS) {
+                        verifyCol(colName, readRow, expectedRow);
                     }
 
                     rowsProcessed++;
