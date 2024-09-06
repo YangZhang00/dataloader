@@ -36,6 +36,7 @@ import java.net.HttpURLConnection;
 import java.net.ProxySelector;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URL;
 import java.net.URLDecoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -53,6 +54,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -61,9 +63,13 @@ import javax.xml.parsers.FactoryConfigurationError;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.exception.ConfigInitializationException;
+import com.sforce.ws.bind.CalendarCodec;
 
 
 /**
@@ -96,6 +102,10 @@ public class AppUtil {
     public static final String CLI_OPTION_GMT_FOR_DATE_FIELD_VALUE = "datefield.usegmt";
     public static final String CLI_OPTION_SWT_NATIVE_LIB_IN_JAVA_LIB_PATH = "swt.nativelib.inpath";
     public static final String CLI_OPTION_CONFIG_DIR_PROP = "salesforce.config.dir";
+    public static final String CLI_OPTION_INSTALLATION_FOLDER_PROP = "salesforce.installation.dir";
+    public static final String CLI_OPTION_INSTALLATION_CREATE_DESKTOP_SHORTCUT_PROP = "salesforce.installation.shortcut.desktop";
+    public static final String CLI_OPTION_INSTALLATION_CREATE_WINDOWS_START_MENU_SHORTCUT_PROP = "salesforce.installation.shortcut.windows.startmenu";
+    public static final String CLI_OPTION_INSTALLATION_CREATE_MACOS_APPS_FOLDER_SHORTCUT_PROP = "salesforce.installation.shortcut.macos.appsfolder";
     public static final String CONFIG_DIR_DEFAULT_VALUE = "configs";
     public static final String DATALOADER_DOWNLOAD_URL = "https://developer.salesforce.com/tools/data-loader";
     public static final int EXIT_CODE_NO_ERRORS = 0;
@@ -108,7 +118,7 @@ public class AppUtil {
     private static Logger logger = null;
     private static String latestDownloadableDataLoaderVersion;
     private static final ArrayList<String> CONTENT_SOBJECT_LIST = new ArrayList<String>();
-    
+
     static {
         Properties versionProps = new Properties();
         try {
@@ -286,16 +296,21 @@ public class AppUtil {
     private static synchronized void setConfigurationsDir(Map<String, String> argsMap) {
         if (argsMap != null && argsMap.containsKey(CLI_OPTION_CONFIG_DIR_PROP)) {
             configurationsDir = argsMap.get(CLI_OPTION_CONFIG_DIR_PROP);
-        } else {
-            if (configurationsDir == null) {
-                // first time invocation and configurationsDir is not set through argsMap
-                configurationsDir = System.getProperty(CLI_OPTION_CONFIG_DIR_PROP);
-            }
-            if (configurationsDir != null && !configurationsDir.isEmpty()) {
+        } else if (configurationsDir != null && !configurationsDir.isEmpty()) {
                 return;
+        } else {
+            // first time invocation and configurationsDir is not set through argsMap
+            configurationsDir = System.getProperty(CLI_OPTION_CONFIG_DIR_PROP);
+            if (configurationsDir == null || configurationsDir.isBlank()) {
+                configurationsDir = getDefaultConfigDir();
             }
-            // first time invocation, configurationsDir is not set through argsMap or through system property
-            configurationsDir = getDefaultConfigDir();
+        }
+        File configDirFile = new File(configurationsDir);
+        try {
+            configurationsDir = configDirFile.getCanonicalPath();
+        } catch (IOException e) {
+            System.err.println("Unable to find configuration folder " + configurationsDir);
+            configurationsDir = configDirFile.getAbsolutePath();
         }
         System.setProperty(CLI_OPTION_CONFIG_DIR_PROP, configurationsDir);
     }
@@ -476,5 +491,38 @@ public class AppUtil {
             logger.info("Unable to check for the latest available data loader version: " + e.getMessage());
             return DATALOADER_VERSION;
         }
+    }
+    
+
+    public static boolean isValidHttpsUrl(String url) {
+        try {
+            // check if it is a valid url
+            URI uri = new URL(url).toURI();
+            // check if it is https protocol
+            return "https".equalsIgnoreCase(uri.getScheme());
+        }
+        catch (Exception e) {
+            return false;
+        }
+    }
+    public static void validateAuthenticationHostDomainUrlAndThrow(String url) {
+        if (!isValidHttpsUrl(url)) {
+            throw new RuntimeException("Dataloader only supports Authentication host domain URL that uses https protocol:" + url);
+        }
+    }
+    
+    public static String serializeToJson(Map<String, Object> nameValueMap) throws JsonProcessingException {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.setDateFormat(CalendarCodec.getDateFormat());
+        return mapper.writeValueAsString(nameValueMap);
+    }
+
+    public static <T> T deserializeJsonToObject (InputStream in, Class<T> tmpClass) throws IOException {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.configure(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY, true);
+        // By default, ObjectMapper generates Calendar instances with UTC TimeZone.
+        // Here, override that to "GMT" to better match the behavior of the WSC XML parser.
+        mapper.setTimeZone(TimeZone.getTimeZone("GMT"));
+        return mapper.readValue(in, tmpClass);
     }
 }

@@ -32,7 +32,6 @@ import com.salesforce.dataloader.config.LastRun;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.util.AppUtil;
 import com.salesforce.dataloader.util.LoggingUtil;
-import com.sforce.soap.partner.Connector;
 
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.SWT;
@@ -53,29 +52,29 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.TimeZone;
 
-import static com.salesforce.dataloader.ui.UIUtils.isValidHttpsUrl;
-
 public class AdvancedSettingsDialog extends BaseDialog {
-    private Text textBatch;
-    private Text textQueryBatch;
+    private Text textImportBatchSize;
+    private Link labelImportBatchSize;
+    private Text textExportBatchSize;
     private Text textUploadCSVDelimiterValue;
     private Text textQueryResultsDelimiterValue;
     private Button buttonNulls;
+    private Text labelNulls;
     private Text textRule;
-    private Text textEndpoint;
+    private Text textProdEndpoint;
+    private Text textSBEndpoint;
     private Button buttonCompression;
-    private Button buttonResetUrl;
     private Text textTimeout;
     private Text textRowToStart;
     private Text textProxyHost;
@@ -91,9 +90,8 @@ public class AdvancedSettingsDialog extends BaseDialog {
     private Text textSandboxBulkClientID;
     private Text textWizardWidth;
     private Text textWizardHeight;
-    private final String defaultServer;
 
-    private Button buttonHideWelcomeScreen;
+    private Button buttonShowWelcomeScreen;
     private Button buttonShowLoaderUpgradeScreen;
     private Button buttonOutputExtractStatus;
     private Button buttonSortExtractFields;
@@ -102,11 +100,17 @@ public class AdvancedSettingsDialog extends BaseDialog {
     private Button buttonWriteUtf8;
     private Button buttonEuroDates;
     private Button buttonTruncateFields;
+    private Text   labelTruncateFields;
     private Button buttonFormatPhoneFields;
     private Button buttonKeepAccountTeam;
+    private Button buttonUndeleteEnabled;
+    private Button buttonHardDeleteEnabled;
+    private Button buttonUpdateWithExternalId;
+    private Link   labelUpdateWithExternalId;
     private Button buttonCacheDescribeGlobalResults;
     private Button buttonIncludeRTFBinaryDataInQueryResults;
-    private Button buttonUseBulkApi;
+    private Button buttonUseSOAPApi;
+    private Button buttonUseBulkV1Api;
     private Button buttonUseBulkV2Api;
     private Button buttonBulkApiSerialMode;
     private Button buttonBulkApiZipContent;
@@ -117,6 +121,10 @@ public class AdvancedSettingsDialog extends BaseDialog {
     private Button buttonPopulateResultsFolderOnWizardFinishStep;
     private static final String[] LOGGING_LEVEL = { "ALL", "DEBUG", "INFO", "WARN", "ERROR", "FATAL" };
     private Combo comboLoggingLevelDropdown;
+    private Composite soapApiOptionsComposite;
+    private Composite bulkApiOptionsComposite;
+    private Composite exportBatchSizeComposite;
+    private Composite importBatchSizeComposite;
     
     /**
      * InputDialog constructor
@@ -125,34 +133,67 @@ public class AdvancedSettingsDialog extends BaseDialog {
      */
     public AdvancedSettingsDialog(Shell parent, Controller controller) {
         super(parent, controller);
+    }
 
-        URI uri;
-        String server = "";
-        try {
-            uri = new URI(Connector.END_POINT);
-            server = uri.getScheme() + "://" + uri.getHost(); //$NON-NLS-1$
-        } catch (URISyntaxException e) {
-            logger.error("", e);
+    private final Map<Button, Composite> apiOptionsMap = new HashMap<Button, Composite>();
+    private boolean useBulkAPI = false;
+    private boolean useBulkV2API = false;
+    private boolean useSoapAPI = false;
+    
+    
+    private void setEnabled(Label label, boolean isEnabled) {
+        int color = isEnabled ? SWT.COLOR_BLACK : SWT.COLOR_GRAY;
+        label.setForeground(getParent().getDisplay().getSystemColor(color));
+    }
+    
+    private void setEnabled(Control ctrl, boolean enabled) {
+        if (ctrl instanceof Composite) {
+            Composite comp = (Composite) ctrl;
+            for (Control child : comp.getChildren()) {
+                if (enabled && comp == this.soapApiOptionsComposite) {
+                    setEnabled(child, !this.buttonUpdateWithExternalId.getSelection());
+                } else {
+                    setEnabled(child, enabled);
+                }
+            }
+            if (enabled && comp == this.soapApiOptionsComposite) {
+                setEnabled(buttonUpdateWithExternalId, true);
+                setEnabled(labelUpdateWithExternalId, true);
+                setEnabled(buttonNulls, true);
+                setEnabled(labelNulls, true);
+                setEnabled(buttonTruncateFields, true);
+                setEnabled(labelTruncateFields, true);
+            }
+        } else if (ctrl instanceof Label) {
+            setEnabled((Label)ctrl, enabled);
+        } else { // Button, Checkbox, Dropdown list etc
+            ctrl.setEnabled(enabled);
         }
-        defaultServer = server;
     }
-
-    private final Map<Button, Boolean> oldBulkAPIDependencies = new HashMap<Button, Boolean>();
-
-    private void setBulkSettings(boolean enabled) {
-        setButtonEnabled(Config.BULK_API_SERIAL_MODE, buttonBulkApiSerialMode, enabled);
-        setButtonEnabled(Config.BULK_API_ZIP_CONTENT, buttonBulkApiZipContent, enabled);
-        setButtonEnabled(Config.INSERT_NULLS, buttonNulls, !enabled);
-        setButtonEnabled(Config.TRUNCATE_FIELDS, buttonTruncateFields, !enabled);
-        setButtonEnabled(Config.BULKV2_API_ENABLED, buttonUseBulkV2Api, enabled);
-        textBatch.setEnabled(!buttonUseBulkV2Api.getSelection());
+    
+    private void setAllApiOptions() {
+        for (Button apiButton : apiOptionsMap.keySet()) {
+            enableApiOptions(apiButton, false);
+        }
+        Button selectedButton = useBulkAPI ? this.buttonUseBulkV1Api : (useBulkV2API ? this.buttonUseBulkV2Api : this.buttonUseSOAPApi);
+        enableApiOptions(selectedButton, true);
+        setEnabled(this.exportBatchSizeComposite, useSoapAPI);
+        setEnabled(this.importBatchSizeComposite, !useBulkV2API);
+        this.buttonUndeleteEnabled.setSelection(useSoapAPI);
+        this.buttonHardDeleteEnabled.setSelection(!useSoapAPI);
     }
-
-    private void setButtonEnabled(String configKey, Button b, boolean enabled) {
-        Boolean previousValue = oldBulkAPIDependencies.put(b, b.getSelection());
-        b.setSelection(enabled ? (previousValue != null ? previousValue : getController().getConfig().getBoolean(
-                configKey)) : false);
-        b.setEnabled(enabled);
+    
+    private void enableApiOptions(Button apiButton, boolean isEnabled) {
+        Composite apiOptionsComposite = apiOptionsMap.get(apiButton);
+        if (apiOptionsComposite != null) {
+            setEnabled(apiOptionsComposite, isEnabled);
+        }
+    }
+    
+    private void initializeAllApiOptions() {
+        apiOptionsMap.put(buttonUseSOAPApi, soapApiOptionsComposite);
+        apiOptionsMap.put(buttonUseBulkV1Api, bulkApiOptionsComposite);
+        setAllApiOptions();
     }
 
     /**
@@ -160,8 +201,7 @@ public class AdvancedSettingsDialog extends BaseDialog {
      *
      * @param shell the dialog window
      */
-    protected void createContents(final Shell shell) {
-
+    protected void createContents(final Shell shell) {        
         final Config config = getController().getConfig();
         GridData data;
         
@@ -202,23 +242,22 @@ public class AdvancedSettingsDialog extends BaseDialog {
         blank.setBackground(Display.getCurrent().getSystemColor(SWT.COLOR_WHITE));
 
         // Show the message
-        Label label = new Label(topComp, SWT.NONE);
-        label.setText(getMessage());
+        Link dialogMessage = createLink(topComp, "message", null, null);
         data = new GridData(GridData.FILL_HORIZONTAL);
         data.heightHint = 30;
         data.widthHint = 370;
-
-        Font f = label.getFont();
+        Font f = dialogMessage.getFont();
         FontData[] farr = f.getFontData();
         FontData fd = farr[0];
         fd.setStyle(SWT.BOLD);
-        label.setFont(new Font(Display.getCurrent(), fd));
+        dialogMessage.setFont(new Font(Display.getCurrent(), fd));
 
-        label.setLayoutData(data);
-        label.setBackground(Display.getCurrent().getSystemColor(SWT.COLOR_WHITE));
+        dialogMessage.setLayoutData(data);
+        dialogMessage.setBackground(Display.getCurrent().getSystemColor(SWT.COLOR_WHITE));
 
         Label labelSeparator = new Label(topComp, SWT.SEPARATOR | SWT.HORIZONTAL);
         data = new GridData(GridData.FILL_HORIZONTAL);
+        labelSeparator.setBackground(getParent().getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
         labelSeparator.setLayoutData(data);
 
         // END TOP COMPONENT
@@ -228,108 +267,193 @@ public class AdvancedSettingsDialog extends BaseDialog {
         Composite restComp = new Composite(container, SWT.NONE);
         data = new GridData(GridData.FILL_BOTH);
         restComp.setLayoutData(data);
-        layout = new GridLayout(2, false);
+        layout = new GridLayout(2, true);
         layout.verticalSpacing = 10;
         restComp.setLayout(layout);
 
-        // Hide welecome screen
-        Label labelHideWelcomeScreen = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelHideWelcomeScreen.setText(Labels.getString("AdvancedSettingsDialog.hideWelcomeScreen")); //$NON-NLS-1$
-        labelHideWelcomeScreen.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
+        // Hide welcome screen
+        createLink(restComp, "showWelcomeScreen", null, null);
+        buttonShowWelcomeScreen = new Button(restComp, SWT.CHECK);
+        buttonShowWelcomeScreen.setSelection(!config.getBoolean(Config.HIDE_WELCOME_SCREEN));
 
-        buttonHideWelcomeScreen = new Button(restComp, SWT.CHECK);
-        buttonHideWelcomeScreen.setSelection(config.getBoolean(Config.HIDE_WELCOME_SCREEN));
-
-        // Hide welecome screen
-        Label labelShowLoaderUpgradeScreen = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelShowLoaderUpgradeScreen.setText(Labels.getString("AdvancedSettingsDialog.showLoaderUpgradeScreen")); //$NON-NLS-1$
-        labelShowLoaderUpgradeScreen.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
-
+        // Hide welcome screen
+        createLink(restComp, "showLoaderUpgradeScreen", null, null);
         buttonShowLoaderUpgradeScreen = new Button(restComp, SWT.CHECK);
         buttonShowLoaderUpgradeScreen.setSelection(config.getBoolean(Config.SHOW_LOADER_UPGRADE_SCREEN));
 
-        //batch size
-        Label labelBatch = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelBatch.setText(Labels.getString("AdvancedSettingsDialog.batchSize")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelBatch.setLayoutData(data);
+        blank = new Label(restComp, SWT.NONE);
+        data = new GridData();
+        data.horizontalSpan = 2;
+        data.heightHint = 15;
+        blank.setLayoutData(data);
 
-        textBatch = new Text(restComp, SWT.BORDER);
-        textBatch.setText(Integer.toString(config.getLoadBatchSize()));
-        textBatch.addVerifyListener(new VerifyListener() {
+        labelSeparator = new Label(restComp, SWT.SEPARATOR | SWT.HORIZONTAL);
+        data = new GridData(GridData.FILL_HORIZONTAL);
+        data.horizontalIndent = 100;
+        data.horizontalSpan = 2;
+        labelSeparator.setLayoutData(data);
+        
+        Composite apiChoiceComposite = new Composite(restComp, SWT.None);
+        layout = new GridLayout(3, true);
+        layout.verticalSpacing = 10;
+        apiChoiceComposite.setLayout(layout);
+        data = new GridData();
+        data.horizontalSpan = 2;
+        data.horizontalAlignment = SWT.FILL;
+        data.grabExcessHorizontalSpace = true;
+        apiChoiceComposite.setLayoutData(data);
+
+        // Enable Bulk API Setting
+        useBulkAPI = config.getBoolean(Config.BULK_API_ENABLED) && !config.getBoolean(Config.BULKV2_API_ENABLED);
+        useBulkV2API = config.getBoolean(Config.BULKV2_API_ENABLED);
+        useSoapAPI = !useBulkAPI && !useBulkV2API;
+
+        buttonUseSOAPApi = new Button(apiChoiceComposite, SWT.RADIO);
+        buttonUseSOAPApi.setToolTipText(Labels.getString("AdvancedSettingsDialog.TooltipUseSOAPApi"));
+        buttonUseSOAPApi.setSelection(useSoapAPI);
+        buttonUseSOAPApi.setText(Labels.getString("AdvancedSettingsDialog.useSOAPApi"));
+        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
+        data.grabExcessHorizontalSpace = true;
+        buttonUseSOAPApi.setLayoutData(data);
+        buttonUseSOAPApi.addSelectionListener(new SelectionAdapter() {
             @Override
-            public void verifyText(VerifyEvent event) {
-                event.doit = Character.isISOControl(event.character) || Character.isDigit(event.character);
+            public void widgetSelected(SelectionEvent e) {
+                super.widgetSelected(e);
+                useSoapAPI = buttonUseSOAPApi.getSelection();
+                if (!useSoapAPI) {
+                    return;
+                }
+                useBulkAPI = false;
+                useBulkV2API = false;
+                setAllApiOptions();
+                
+                // update batch size when this setting changes
+                int newDefaultBatchSize = getController().getConfig().getDefaultImportBatchSize(false, false);
+                logger.info("Setting batch size to " + newDefaultBatchSize);
+                textImportBatchSize.setText(String.valueOf(newDefaultBatchSize));
+                String[] args = {getImportBatchLimitsURL(), 
+                        Integer.toString(config.getMaxImportBatchSize(useBulkAPI || useBulkV2API, useBulkV2API))};
+                labelImportBatchSize.setText(
+                        Labels.getFormattedString(AdvancedSettingsDialog.class.getSimpleName() + ".importBatchSize", args));
             }
         });
-        data = new GridData();
-        GC gc = new GC(textBatch);
-        Point textSize = gc.textExtent("8");
-        gc.dispose();
-        textBatch.setTextLimit(8);
-        data.widthHint = 8 * textSize.x;
-        textBatch.setLayoutData(data);
+        
+        buttonUseBulkV1Api = new Button(apiChoiceComposite, SWT.RADIO);
+        buttonUseBulkV1Api.setToolTipText(Labels.getString("AdvancedSettingsDialog.TooltipUseBulkV1Api"));
+        buttonUseBulkV1Api.setSelection(useBulkAPI);
+        buttonUseBulkV1Api.setText(Labels.getString("AdvancedSettingsDialog.useBulkV1Api"));
+        data = new GridData(GridData.HORIZONTAL_ALIGN_CENTER);
+        data.grabExcessHorizontalSpace = true;
+        buttonUseBulkV1Api.setLayoutData(data);
+        buttonUseBulkV1Api.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                super.widgetSelected(e);
+                useBulkAPI = buttonUseBulkV1Api.getSelection();
+                if (!useBulkAPI) {
+                    return;
+                }
+                useSoapAPI = false;
+                useBulkV2API = false;
+                setAllApiOptions();
+                
+                // update batch size when this setting changes
+                int newDefaultBatchSize = getController().getConfig().getDefaultImportBatchSize(true, false);
+                logger.info("Setting batch size to " + newDefaultBatchSize);
+                textImportBatchSize.setText(String.valueOf(newDefaultBatchSize));
+                String[] args = {getImportBatchLimitsURL(), 
+                        Integer.toString(config.getMaxImportBatchSize(useBulkAPI || useBulkV2API, useBulkV2API))};
+                labelImportBatchSize.setText(
+                        Labels.getFormattedString(AdvancedSettingsDialog.class.getSimpleName() + ".importBatchSize", args));
+            }
+        });
+        
+        // Enable Bulk API 2.0 Setting
+        buttonUseBulkV2Api = new Button(apiChoiceComposite, SWT.RADIO);
+        buttonUseBulkV2Api.setToolTipText(Labels.getString("AdvancedSettingsDialog.TooltipUseBulkV2Api"));
+        buttonUseBulkV2Api.setSelection(useBulkV2API);
+        buttonUseBulkV2Api.setText(Labels.getString("AdvancedSettingsDialog.useBulkV2Api"));
+        data = new GridData(GridData.HORIZONTAL_ALIGN_BEGINNING);
+        data.grabExcessHorizontalSpace = true;
+        buttonUseBulkV2Api.setLayoutData(data);
+        buttonUseBulkV2Api.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                super.widgetSelected(e);
+                useBulkV2API = buttonUseBulkV2Api.getSelection();
+                if (!useBulkV2API) {
+                    return;
+                }
+                useSoapAPI = false;
+                useBulkAPI = false;
+                setAllApiOptions();
+                
+                // get default batch size for Bulk v2 and set it
+                int newDefaultBatchSize = getController().getConfig().getDefaultImportBatchSize(true, true);
+                logger.info("Setting batch size to " + newDefaultBatchSize);
+                textImportBatchSize.setText(String.valueOf(newDefaultBatchSize));
+                String[] args = {getImportBatchLimitsURL(), 
+                        getImportBatchLimitsURL(), Integer.toString(config.getMaxImportBatchSize(useBulkAPI || useBulkV2API, useBulkV2API))};
+                labelImportBatchSize.setText(
+                        Labels.getFormattedString(AdvancedSettingsDialog.class.getSimpleName() + ".importBatchSize", args));
+            }
+        });
+        
+        
+        // SOAP API - Keep Account team setting
+        this.soapApiOptionsComposite = new Composite(restComp, SWT.None);
+        data = new GridData(GridData.FILL_BOTH);
+        data.horizontalSpan = 2;
+        data.grabExcessHorizontalSpace = true;
+        this.soapApiOptionsComposite.setLayoutData(data);
+        layout = new GridLayout(2, true);
+        layout.verticalSpacing = 10;
+        this.soapApiOptionsComposite.setLayout(layout);
+        
+        createLink(soapApiOptionsComposite, "keepAccountTeam", null, "TooltipKeepAccountTeam");
+        boolean keepAccountTeam = config.getBoolean(Config.PROCESS_KEEP_ACCOUNT_TEAM);
+        buttonKeepAccountTeam = new Button(this.soapApiOptionsComposite, SWT.CHECK);
+        buttonKeepAccountTeam.setSelection(keepAccountTeam);
+        data = new GridData(GridData.HORIZONTAL_ALIGN_BEGINNING);
+        data.grabExcessHorizontalSpace = true;
+        buttonKeepAccountTeam.setLayoutData(data);
+        buttonKeepAccountTeam.setToolTipText(Labels.getString("AdvancedSettingsDialog.TooltipKeepAccountTeam"));
+
+        // update using external id
+        labelUpdateWithExternalId = createLink(soapApiOptionsComposite, "updateWithExternalId", null, null);
+        boolean updateWithExternalId = config.getBoolean(Config.UPDATE_WITH_EXTERNALID);
+        buttonUpdateWithExternalId = new Button(this.soapApiOptionsComposite, SWT.CHECK);
+        buttonUpdateWithExternalId.setSelection(updateWithExternalId);
+        data = new GridData(GridData.HORIZONTAL_ALIGN_BEGINNING);
+        data.grabExcessHorizontalSpace = true;
+        buttonUpdateWithExternalId.setLayoutData(data);
+        buttonUpdateWithExternalId.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                super.widgetSelected(e);
+                setEnabled(soapApiOptionsComposite, true);
+           }
+        });
 
         //insert Nulls
-        Label labelNulls = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelNulls.setText(Labels.getString("AdvancedSettingsDialog.insertNulls")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelNulls.setLayoutData(data);
-        buttonNulls = new Button(restComp, SWT.CHECK);
+        labelNulls = createLabel(soapApiOptionsComposite, "insertNulls", null, "TooltipInsertNulls");
+        buttonNulls = new Button(this.soapApiOptionsComposite, SWT.CHECK);
         buttonNulls.setSelection(config.getBoolean(Config.INSERT_NULLS));
 
-        //assignment rules
-        Label labelRule = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelRule.setText(Labels.getString("AdvancedSettingsDialog.assignmentRule")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelRule.setLayoutData(data);
-
-        textRule = new Text(restComp, SWT.BORDER);
-        data = new GridData();
-        textRule.setTextLimit(18);
-        data.widthHint = 18 * textSize.x;
-        textRule.setLayoutData(data);
-        textRule.setText(config.getString(Config.ASSIGNMENT_RULE));
-
-        //endpoint
-        Label labelEndpoint = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelEndpoint.setText(Labels.getString("AdvancedSettingsDialog.serverURL")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelEndpoint.setLayoutData(data);
-
-        textEndpoint = new Text(restComp, SWT.BORDER);
-        data = new GridData(GridData.FILL_HORIZONTAL);
-        data.widthHint = 30 * textSize.x;
-        textEndpoint.setLayoutData(data);
-        String endpoint = config.getString(Config.ENDPOINT);
-        if ("".equals(endpoint)) { //$NON-NLS-1$
-            endpoint = defaultServer;
-        }
-        textEndpoint.setText(endpoint);
-
-        //reset url on login
-        Label labelResetUrl = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelResetUrl.setText(Labels.getString("AdvancedSettingsDialog.resetUrlOnLogin")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelResetUrl.setLayoutData(data);
-        buttonResetUrl = new Button(restComp, SWT.CHECK);
-        buttonResetUrl.setSelection(config.getBoolean(Config.RESET_URL_ON_LOGIN));
-
+        //Field truncation
+        labelTruncateFields = createLabel(soapApiOptionsComposite, "allowFieldTruncation", null, null);
+        buttonTruncateFields = new Button(this.soapApiOptionsComposite, SWT.CHECK);
+        buttonTruncateFields.setSelection(config.getBoolean(Config.TRUNCATE_FIELDS));
+        
         //insert compression
-        Label labelCompression = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelCompression.setText(Labels.getString("AdvancedSettingsDialog.compression")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelCompression.setLayoutData(data);
-        buttonCompression = new Button(restComp, SWT.CHECK);
+        createLabel(soapApiOptionsComposite, "compression", null, "TooltipCompression");
+        buttonCompression = new Button(soapApiOptionsComposite, SWT.CHECK);
         buttonCompression.setSelection(config.getBoolean(Config.NO_COMPRESSION));
+        buttonCompression.setToolTipText(Labels.getString("AdvancedSettingsDialog.TooltipCompression"));
 
         //timeout size
-        Label labelTimeout = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelTimeout.setText(Labels.getString("AdvancedSettingsDialog.timeout")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelTimeout.setLayoutData(data);
-
-        textTimeout = new Text(restComp, SWT.BORDER);
+        createLabel(soapApiOptionsComposite, "timeout", null, "TooltipTimeout");
+        textTimeout = new Text(soapApiOptionsComposite, SWT.BORDER);
         textTimeout.setText(config.getString(Config.TIMEOUT_SECS));
         textTimeout.addVerifyListener(new VerifyListener() {
             @Override
@@ -339,128 +463,202 @@ public class AdvancedSettingsDialog extends BaseDialog {
         });
         data = new GridData();
         textTimeout.setTextLimit(4);
+        GC gc = new GC(textTimeout);
+        Point textSize = gc.textExtent("8");
+        gc.dispose();
         data.widthHint = 4 * textSize.x;
         textTimeout.setLayoutData(data);
+        textTimeout.setToolTipText(Labels.getString("AdvancedSettingsDialog.TooltipTimeout"));
 
-        //extraction batch size
-        Label labelQueryBatch = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelQueryBatch.setText(Labels.getString("ExtractionInputDialog.querySize")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelQueryBatch.setLayoutData(data);
+        // Bulk API serial concurrency mode setting
+        this.bulkApiOptionsComposite = new Composite(restComp, SWT.None);
+        data = new GridData(GridData.FILL_BOTH);
+        data.horizontalSpan = 2;
+        data.grabExcessHorizontalSpace = true;
+        this.bulkApiOptionsComposite.setLayoutData(data);
+        layout = new GridLayout(2, true);
+        layout.verticalSpacing = 10;
+        this.bulkApiOptionsComposite.setLayout(layout);
 
-        textQueryBatch = new Text(restComp, SWT.BORDER);
-        textQueryBatch.setText(config.getString(Config.EXTRACT_REQUEST_SIZE));
-        textQueryBatch.addVerifyListener(new VerifyListener() {
+        createLink(bulkApiOptionsComposite, "bulkApiSerialMode", null, null);
+        buttonBulkApiSerialMode = new Button(this.bulkApiOptionsComposite, SWT.CHECK);
+        buttonBulkApiSerialMode.setSelection(config.getBoolean(Config.BULK_API_SERIAL_MODE));
+        data = new GridData(GridData.HORIZONTAL_ALIGN_BEGINNING);
+        data.grabExcessHorizontalSpace = true;
+        buttonBulkApiSerialMode.setLayoutData(data);
+
+        // Bulk API serial concurrency mode setting
+        createLink(bulkApiOptionsComposite, "bulkApiZipContent", null, null);
+        buttonBulkApiZipContent = new Button(this.bulkApiOptionsComposite, SWT.CHECK);
+        buttonBulkApiZipContent.setSelection(config.getBoolean(Config.BULK_API_ZIP_CONTENT));
+        data = new GridData(GridData.HORIZONTAL_ALIGN_BEGINNING);
+        data.grabExcessHorizontalSpace = true;
+        buttonBulkApiZipContent.setLayoutData(data);
+
+        //SOAP and Bulk API - batch size
+        this.importBatchSizeComposite = new Composite(restComp, SWT.None);
+        data = new GridData(GridData.FILL_BOTH);
+        data.horizontalSpan = 2;
+        data.grabExcessHorizontalSpace = true;
+        this.importBatchSizeComposite.setLayoutData(data);
+        layout = new GridLayout(2, true);
+        layout.verticalSpacing = 10;
+        this.importBatchSizeComposite.setLayout(layout);
+
+        String[] args = {getImportBatchLimitsURL(), 
+                Integer.toString(config.getMaxImportBatchSize(useBulkAPI || useBulkV2API, useBulkV2API))};
+        labelImportBatchSize = createLink(importBatchSizeComposite, "importBatchSize", 
+                args, null);
+        textImportBatchSize = new Text(importBatchSizeComposite, SWT.BORDER);
+        textImportBatchSize.setText(Integer.toString(config.getImportBatchSize()));
+        textImportBatchSize.setEnabled(!useBulkV2API);
+        textImportBatchSize.addVerifyListener(new VerifyListener() {
             @Override
             public void verifyText(VerifyEvent event) {
                 event.doit = Character.isISOControl(event.character) || Character.isDigit(event.character);
             }
         });
         data = new GridData();
-        textQueryBatch.setTextLimit(4);
+        textImportBatchSize.setTextLimit(8);
+        data.widthHint = 8 * textSize.x;
+        textImportBatchSize.setLayoutData(data);
+
+        //SOAP API - extraction batch size
+        this.exportBatchSizeComposite = new Composite(restComp, SWT.None);
+        data = new GridData(GridData.FILL_BOTH);
+        data.horizontalSpan = 2;
+        data.grabExcessHorizontalSpace = true;
+        this.exportBatchSizeComposite.setLayoutData(data);
+        layout = new GridLayout(2, true);
+        layout.verticalSpacing = 10;
+        this.exportBatchSizeComposite.setLayout(layout);
+        
+        args = new String[]{Integer.toString(Config.MIN_EXPORT_BATCH_SIZE),
+                Integer.toString(Config.MAX_EXPORT_BATCH_SIZE)};
+        createLink(exportBatchSizeComposite, "exportBatchSize", args, null);
+        textExportBatchSize = new Text(exportBatchSizeComposite, SWT.BORDER);
+        textExportBatchSize.setText(config.getString(Config.EXPORT_BATCH_SIZE));
+        textExportBatchSize.addVerifyListener(new VerifyListener() {
+            @Override
+            public void verifyText(VerifyEvent event) {
+                event.doit = Character.isISOControl(event.character) || Character.isDigit(event.character);
+            }
+        });
+        data = new GridData();
+        textExportBatchSize.setTextLimit(4);
         data.widthHint = 4 * textSize.x;
-        textQueryBatch.setLayoutData(data);
+        textExportBatchSize.setLayoutData(data);
+
+        createLink(restComp, "undeleteOperationEnabled", null, "TooltipUndeleteEnabled");
+        buttonUndeleteEnabled = new Button(restComp, SWT.CHECK);
+        // user can't check/uncheck the button
+        buttonUndeleteEnabled.setEnabled(false);
+        buttonUndeleteEnabled.setSelection(useSoapAPI);
+        
+        createLink(restComp, "hardDeleteOperationEnabled", null, "TooltipHardDeleteEnabled");
+        buttonHardDeleteEnabled = new Button(restComp, SWT.CHECK);
+        // user can't check/uncheck the button
+        buttonHardDeleteEnabled.setEnabled(false);
+        buttonHardDeleteEnabled.setSelection(!useSoapAPI);
+
+        initializeAllApiOptions();
+        
+        labelSeparator = new Label(restComp, SWT.SEPARATOR | SWT.HORIZONTAL);
+        data = new GridData(GridData.FILL_HORIZONTAL);
+        data.horizontalIndent = 100;
+        data.horizontalSpan = 2;
+        labelSeparator.setLayoutData(data);
+
+        blank = new Label(restComp, SWT.NONE);
+        data = new GridData();
+        data.horizontalSpan = 2;
+        data.heightHint = 15;
+        blank.setLayoutData(data);
+        
+        //assignment rules
+        createLink(restComp, "assignmentRule", null, null);
+        textRule = new Text(restComp, SWT.BORDER);
+        data = new GridData();
+        textRule.setTextLimit(18);
+        data.widthHint = 18 * textSize.x;
+        textRule.setLayoutData(data);
+        textRule.setText(config.getString(Config.ASSIGNMENT_RULE));
+        textRule.setToolTipText(Labels.getString("AdvancedSettingsDialog.TooltipAssignmentRule"));
+
+        //endpoints
+        createLink(restComp, "prodServerURL", null, null);
+        textProdEndpoint = new Text(restComp, SWT.BORDER);
+        data = new GridData(GridData.FILL_HORIZONTAL);
+        data.widthHint = 30 * textSize.x;
+        textProdEndpoint.setLayoutData(data);
+        String endpoint = config.getString(Config.AUTH_ENDPOINT_PROD);
+        if ("".equals(endpoint)) { //$NON-NLS-1$
+            endpoint = Config.DEFAULT_ENDPOINT_URL_PROD;
+        }
+        textProdEndpoint.setText(endpoint);
+
+        createLink(restComp, "sandboxServerURL", null, null);
+        textSBEndpoint = new Text(restComp, SWT.BORDER);
+        data = new GridData(GridData.FILL_HORIZONTAL);
+        data.widthHint = 30 * textSize.x;
+        textSBEndpoint.setLayoutData(data);
+        endpoint = config.getString(Config.AUTH_ENDPOINT_SANDBOX);
+        if ("".equals(endpoint)) { //$NON-NLS-1$
+            endpoint = Config.DEFAULT_ENDPOINT_URL_SANDBOX;
+        }
+        textSBEndpoint.setText(endpoint);
 
         // enable/disable sort of fields to extract
-        Label labelSortExtractFields = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelSortExtractFields.setText(Labels.getString("AdvancedSettingsDialog.sortQueryFieldsInExtraction")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelSortExtractFields.setLayoutData(data);
-
+        createLabel(restComp, "sortQueryFieldsInExtraction", null, null);
         buttonSortExtractFields = new Button(restComp, SWT.CHECK);
         buttonSortExtractFields.setSelection(config.getBoolean(Config.SORT_EXTRACT_FIELDS));
         
         // enable/disable limiting query result columns to fields specified in the SOQL query
-        Label labelLimitQueryResultColumnsToFieldsInQuery = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelLimitQueryResultColumnsToFieldsInQuery.setText(Labels.getString(this.getClass().getSimpleName() + ".limitOutputToQueryFields")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelLimitQueryResultColumnsToFieldsInQuery.setLayoutData(data);
-       
+        createLabel(restComp, "limitOutputToQueryFields", null, null);
         buttonLimitQueryResultColumnsToFieldsInQuery = new Button(restComp, SWT.CHECK);
         buttonLimitQueryResultColumnsToFieldsInQuery.setSelection(config.getBoolean(Config.LIMIT_OUTPUT_TO_QUERY_FIELDS));
 
         //enable/disable output of success file for extracts
-        Label labelOutputExtractStatus = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelOutputExtractStatus.setText(Labels.getString("AdvancedSettingsDialog.outputExtractStatus")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelOutputExtractStatus.setLayoutData(data);
-
+        createLabel(restComp, "outputExtractStatus", null, null);
         buttonOutputExtractStatus = new Button(restComp, SWT.CHECK);
         buttonOutputExtractStatus.setSelection(config.getBoolean(Config.ENABLE_EXTRACT_STATUS_OUTPUT));
 
         //utf-8 for loading
-        Label labelReadUTF8 = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelReadUTF8.setText(Labels.getString("AdvancedSettingsDialog.readUTF8")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelReadUTF8.setLayoutData(data);
-
+        createLabel(restComp, "readUTF8", null, null);
         buttonReadUtf8 = new Button(restComp, SWT.CHECK);
         buttonReadUtf8.setSelection(config.getBoolean(Config.READ_UTF8));
 
         //utf-8 for extraction
-        Label labelWriteUTF8 = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelWriteUTF8.setText(Labels.getString("AdvancedSettingsDialog.writeUTF8")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelWriteUTF8.setLayoutData(data);
-
+        createLabel(restComp, "writeUTF8", null, null);
         buttonWriteUtf8 = new Button(restComp, SWT.CHECK);
         buttonWriteUtf8.setSelection(config.getBoolean(Config.WRITE_UTF8));
 
         //European Dates
-        Label labelEuropeanDates = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelEuropeanDates.setText(Labels.getString("AdvancedSettingsDialog.useEuropeanDateFormat")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelEuropeanDates.setLayoutData(data);
-
+        createLabel(restComp, "useEuropeanDateFormat", null, null);
         buttonEuroDates = new Button(restComp, SWT.CHECK);
         buttonEuroDates.setSelection(config.getBoolean(Config.EURO_DATES));
 
-        //Field truncation
-        Label labelTruncateFields = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelTruncateFields.setText(Labels.getString("AdvancedSettingsDialog.allowFieldTruncation"));
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelTruncateFields.setLayoutData(data);
-
-        buttonTruncateFields = new Button(restComp, SWT.CHECK);
-        buttonTruncateFields.setSelection(config.getBoolean(Config.TRUNCATE_FIELDS));
-
         //format phone fields on the client side
-        Label labelFormatPhoneFields = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelFormatPhoneFields.setText(Labels.getString("AdvancedSettingsDialog.formatPhoneFields"));
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelFormatPhoneFields.setLayoutData(data);
-
+        createLabel(restComp, "formatPhoneFields", null, null);
         buttonFormatPhoneFields = new Button(restComp, SWT.CHECK);
         buttonFormatPhoneFields.setSelection(config.getBoolean(Config.FORMAT_PHONE_FIELDS));
 
-        Label labelCsvCommand = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelCsvCommand.setText(Labels.getString("AdvancedSettingsDialog.useCommaAsCsvDelimiter"));
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelCsvCommand.setLayoutData(data);
+        createLabel(restComp, "useCommaAsCsvDelimiter", null, null);
         buttonCsvComma = new Button(restComp, SWT.CHECK);
         buttonCsvComma.setSelection(config.getBoolean(Config.CSV_DELIMITER_COMMA));
 
-        Label labelTabCommand = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelTabCommand.setText(Labels.getString("AdvancedSettingsDialog.useTabAsCsvDelimiter"));
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelTabCommand.setLayoutData(data);
+        createLabel(restComp, "useTabAsCsvDelimiter", null, null);
         buttonCsvTab = new Button(restComp, SWT.CHECK);
         buttonCsvTab.setSelection(config.getBoolean(Config.CSV_DELIMITER_TAB));
 
-        Label labelOtherDelimiterValue = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelOtherDelimiterValue.setText(Labels.getString("AdvancedSettingsDialog.csvOtherDelimiterValue"));
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelOtherDelimiterValue.setLayoutData(data);
+        createLabel(restComp, "csvOtherDelimiterValue", null, null);
         textUploadCSVDelimiterValue = new Text(restComp, SWT.BORDER);
         textUploadCSVDelimiterValue.setText(config.getString(Config.CSV_DELIMITER_OTHER_VALUE));
         data = new GridData();
         data.widthHint = 15 * textSize.x;
         textUploadCSVDelimiterValue.setLayoutData(data);
 
-        Label labelQueryResultsDelimiter = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelQueryResultsDelimiter.setText(Labels.getString("AdvancedSettingsDialog.queryResultsDelimiterValue"));
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelQueryResultsDelimiter.setLayoutData(data);
+        createLabel(restComp, "queryResultsDelimiterValue", null, null);
         textQueryResultsDelimiterValue = new Text(restComp, SWT.BORDER);
         textQueryResultsDelimiterValue.setText(config.getString(Config.CSV_DELIMITER_FOR_QUERY_RESULTS));
         textQueryResultsDelimiterValue.setTextLimit(1);
@@ -471,143 +669,29 @@ public class AdvancedSettingsDialog extends BaseDialog {
         
         // include image data for Rich Text Fields in query results
         // Config.INCLUDE_RICH_TEXT_FIELD_DATA_IN_QUERY_RESULTS
-        Label labelIncludeRTFBinaryDataInQueryResults = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelIncludeRTFBinaryDataInQueryResults.setText(Labels.getString("AdvancedSettingsDialog.includeRTFBinaryDataInQueryResults"));
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelIncludeRTFBinaryDataInQueryResults.setLayoutData(data);
-
+        createLabel(restComp, "includeRTFBinaryDataInQueryResults", null, null);
         boolean includeRTFBinaryDataInQueryResults = config.getBoolean(Config.INCLUDE_RICH_TEXT_FIELD_DATA_IN_QUERY_RESULTS);
         buttonIncludeRTFBinaryDataInQueryResults = new Button(restComp, SWT.CHECK);
         buttonIncludeRTFBinaryDataInQueryResults.setSelection(includeRTFBinaryDataInQueryResults);
 
         // Cache DescribeGlobal results across operations
-        Label labelCacheDescribeGlobalResults = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelCacheDescribeGlobalResults.setText(Labels.getString("AdvancedSettingsDialog.cacheDescribeGlobalResults"));
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelCacheDescribeGlobalResults.setLayoutData(data);
-
+        createLabel(restComp, "cacheDescribeGlobalResults", null, null);
         boolean cacheDescribeGlobalResults = config.getBoolean(Config.CACHE_DESCRIBE_GLOBAL_RESULTS);
         buttonCacheDescribeGlobalResults = new Button(restComp, SWT.CHECK);
-        buttonCacheDescribeGlobalResults.setSelection(cacheDescribeGlobalResults);
-        
-        // Keep Account team setting
-        Label labelKeepAccountTeam = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelKeepAccountTeam.setText(Labels.getString("AdvancedSettingsDialog.keepAccountTeam"));
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelKeepAccountTeam.setLayoutData(data);
-
-        boolean keepAccountTeam = config.getBoolean(Config.PROCESS_KEEP_ACCOUNT_TEAM);
-        buttonKeepAccountTeam = new Button(restComp, SWT.CHECK);
-        buttonKeepAccountTeam.setSelection(keepAccountTeam);
-        buttonKeepAccountTeam.addSelectionListener(new SelectionAdapter() {
-            @Override
-            public void widgetSelected(SelectionEvent e) {
-                super.widgetSelected(e);
-                boolean enabled = buttonKeepAccountTeam.getSelection();
-                // make sure the appropriate check boxes are enabled or disabled
-                if (enabled) {
-                    buttonUseBulkApi.setSelection(false);
-                    setBulkSettings(false);
-                }
-            }
-        });
-        buttonKeepAccountTeam.setToolTipText(Labels.getString("AdvancedSettingsDialog.keepAccountTeamHelp"));
-        labelKeepAccountTeam.setToolTipText(Labels.getString("AdvancedSettingsDialog.keepAccountTeamHelp"));
-        
+        buttonCacheDescribeGlobalResults.setSelection(cacheDescribeGlobalResults);        
         
         Label empty = new Label(restComp, SWT.NONE);
         data = new GridData();
         data.horizontalSpan = 2;
         empty.setLayoutData(data);
 
-        // Enable Bulk API Setting
-        Label labelUseBulkApi = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelUseBulkApi.setText(Labels.getString("AdvancedSettingsDialog.useBulkApi")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelUseBulkApi.setLayoutData(data);
-
-        boolean useBulkAPI = config.getBoolean(Config.BULK_API_ENABLED);
-        buttonUseBulkApi = new Button(restComp, SWT.CHECK);
-        buttonUseBulkApi.setSelection(useBulkAPI);
-        buttonUseBulkApi.addSelectionListener(new SelectionAdapter() {
-            @Override
-            public void widgetSelected(SelectionEvent e) {
-                super.widgetSelected(e);
-                boolean enabledBulkV1 = buttonUseBulkApi.getSelection();
-                setBulkSettings(enabledBulkV1);
-                boolean enabledBulkV2 = buttonUseBulkV2Api.getSelection();
-                // update batch size when this setting changes
-                int newDefaultBatchSize = getController().getConfig().getDefaultBatchSize(enabledBulkV1, enabledBulkV2);
-                logger.info("Setting batch size to " + newDefaultBatchSize);
-                textBatch.setText(String.valueOf(newDefaultBatchSize));
-                // make sure the appropriate check boxes are enabled or disabled
-                if (enabledBulkV1) {
-                    buttonKeepAccountTeam.setSelection(false);
-                }
-            }
-        });
-        if (useBulkAPI) {
-            buttonKeepAccountTeam.setSelection(false);
-        }
-        
-        // Enable Bulk API Setting
-        Label labelUseBulkV2API = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelUseBulkV2API.setText(Labels.getString("AdvancedSettingsDialog.enableBulkV2")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelUseBulkV2API.setLayoutData(data);
-
-        boolean useBulkV2Api = useBulkAPI && config.getBoolean(Config.BULKV2_API_ENABLED);
-        buttonUseBulkV2Api = new Button(restComp, SWT.CHECK);
-        buttonUseBulkV2Api.setSelection(useBulkV2Api);
-        buttonUseBulkV2Api.setEnabled(useBulkAPI);
-        textBatch.setEnabled(!useBulkV2Api);
-        buttonUseBulkV2Api.addSelectionListener(new SelectionAdapter() {
-            @Override
-            public void widgetSelected(SelectionEvent e) {
-                super.widgetSelected(e);
-                boolean selected = buttonUseBulkV2Api.getSelection();
-                // make sure the appropriate check boxes are enabled or disabled
-                if (selected) {
-                    buttonBulkApiZipContent.setSelection(false);
-                    buttonBulkApiZipContent.setEnabled(false);
-                    textBatch.setEnabled(false);
-                } else {
-                    textBatch.setEnabled(true);
-                }
-                boolean enabledBulkV1 = buttonUseBulkApi.getSelection();
-                buttonBulkApiZipContent.setEnabled(true);
-                // get default batch size for Bulk v1 and set it
-                int newDefaultBatchSize = getController().getConfig().getDefaultBatchSize(enabledBulkV1, selected);
-                logger.info("Setting batch size to " + newDefaultBatchSize);
-                textBatch.setText(String.valueOf(newDefaultBatchSize));
-            }
-        });
-        
-        // Bulk API serial concurrency mode setting
-        Label labelBulkApiSerialMode = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelBulkApiSerialMode.setText(Labels.getString("AdvancedSettingsDialog.bulkApiSerialMode")); //$NON-NLS-1$
-        labelBulkApiSerialMode.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
-
-        buttonBulkApiSerialMode = new Button(restComp, SWT.CHECK);
-        buttonBulkApiSerialMode.setSelection(config.getBoolean(Config.BULK_API_SERIAL_MODE));
-        buttonBulkApiSerialMode.setEnabled(useBulkAPI);
-
-        // Bulk API serial concurrency mode setting
-        Label labelBulkApiZipContent = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelBulkApiZipContent.setText(Labels.getString("AdvancedSettingsDialog.bulkApiZipContent")); //$NON-NLS-1$
-        labelBulkApiZipContent.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
-
-        buttonBulkApiZipContent = new Button(restComp, SWT.CHECK);
-        buttonBulkApiZipContent.setSelection(config.getBoolean(Config.BULK_API_SERIAL_MODE));
-        buttonBulkApiZipContent.setEnabled(useBulkAPI);
-        
         empty = new Label(restComp, SWT.NONE);
         data = new GridData();
         data.horizontalSpan = 2;
         empty.setLayoutData(data);
 
         // timezone
-        textTimezone = createTimezoneTextInput(restComp, "AdvancedSettingsDialog.timezone", Config.TIMEZONE, TimeZone.getDefault().getID(), 30 * textSize.x);
+        textTimezone = createTimezoneTextInput(restComp, "timezone", Config.TIMEZONE, TimeZone.getDefault().getID(), 30 * textSize.x);
         
         empty = new Label(restComp, SWT.NONE);
         data = new GridData();
@@ -615,22 +699,14 @@ public class AdvancedSettingsDialog extends BaseDialog {
         empty.setLayoutData(data);
         
         // proxy Host
-        Label labelProxyHost = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelProxyHost.setText(Labels.getString("AdvancedSettingsDialog.proxyHost")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelProxyHost.setLayoutData(data);
-
+        createLabel(restComp, "proxyHost", null, null);
         textProxyHost = new Text(restComp, SWT.BORDER);
         textProxyHost.setText(config.getString(Config.PROXY_HOST));
         data = new GridData(GridData.FILL_HORIZONTAL);
         textProxyHost.setLayoutData(data);
 
         //Proxy Port
-        Label labelProxyPort = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelProxyPort.setText(Labels.getString("AdvancedSettingsDialog.proxyPort")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelProxyPort.setLayoutData(data);
-
+        createLabel(restComp, "proxyPort", null, null);
         textProxyPort = new Text(restComp, SWT.BORDER);
         textProxyPort.setText(config.getString(Config.PROXY_PORT));
         textProxyPort.addVerifyListener(new VerifyListener() {
@@ -645,11 +721,7 @@ public class AdvancedSettingsDialog extends BaseDialog {
         textProxyPort.setLayoutData(data);
 
         //Proxy Username
-        Label labelProxyUsername = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelProxyUsername.setText(Labels.getString("AdvancedSettingsDialog.proxyUser")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelProxyUsername.setLayoutData(data);
-
+        createLabel(restComp, "proxyUser", null, null);
         textProxyUsername = new Text(restComp, SWT.BORDER);
         textProxyUsername.setText(config.getString(Config.PROXY_USERNAME));
         data = new GridData();
@@ -657,24 +729,15 @@ public class AdvancedSettingsDialog extends BaseDialog {
         textProxyUsername.setLayoutData(data);
 
         //Proxy Password
-        Label labelProxyPassword = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelProxyPassword.setText(Labels.getString("AdvancedSettingsDialog.proxyPassword")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelProxyPassword.setLayoutData(data);
-
+        createLabel(restComp, "proxyPassword", null, null);
         textProxyPassword = new Text(restComp, SWT.BORDER | SWT.PASSWORD);
         textProxyPassword.setText(config.getString(Config.PROXY_PASSWORD));
         data = new GridData();
         data.widthHint = 20 * textSize.x;
         textProxyPassword.setLayoutData(data);
 
-
         //proxy NTLM domain
-        Label labelProxyNtlmDomain = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelProxyNtlmDomain.setText(Labels.getString("AdvancedSettingsDialog.proxyNtlmDomain")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelProxyNtlmDomain.setLayoutData(data);
-
+        createLabel(restComp, "proxyNtlmDomain", null, null);
         textProxyNtlmDomain = new Text(restComp, SWT.BORDER);
         textProxyNtlmDomain.setText(config.getString(Config.PROXY_NTLM_DOMAIN));
         data = new GridData(GridData.FILL_HORIZONTAL);
@@ -685,47 +748,37 @@ public class AdvancedSettingsDialog extends BaseDialog {
         data.horizontalSpan = 2;
         empty.setLayoutData(data);
         
-        Label loginFromBrowserCheckboxText = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        loginFromBrowserCheckboxText.setText(Labels.getString("AdvancedSettingsDialog.loginFromBrowser"));
-        loginFromBrowserCheckboxText.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
+        createLabel(restComp, "loginFromBrowser", null, null);
         boolean doLoginFromBrowser = config.getBoolean(Config.OAUTH_LOGIN_FROM_BROWSER);
         buttonLoginFromBrowser = new Button(restComp, SWT.CHECK);
         buttonLoginFromBrowser.setSelection(doLoginFromBrowser);
         
-        Label clientIdInProductionText = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        clientIdInProductionText.setText(Labels.getString("AdvancedSettingsDialog.partnerClientIdInProduction"));
-        clientIdInProductionText.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
+        createLabel(restComp, "partnerClientIdInProduction", null, null);
         this.textProductionPartnerClientID = new Text(restComp, SWT.NONE);
         data = new GridData(GridData.FILL_HORIZONTAL);
         textProductionPartnerClientID.setLayoutData(data);
-    	String clientId = config.getOAuthEnvironmentString(Config.OAUTH_PROD_ENVIRONMENT_VAL, Config.OAUTH_PARTIAL_PARTNER_CLIENTID);
+    	String clientId = config.getOAuthEnvironmentString(Config.PROD_ENVIRONMENT_VAL, Config.OAUTH_PARTIAL_PARTNER_CLIENTID);
     	this.textProductionPartnerClientID.setText(clientId);
         
-        clientIdInProductionText = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        clientIdInProductionText.setText(Labels.getString("AdvancedSettingsDialog.bulkClientIdInProduction"));
-        clientIdInProductionText.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
+        createLabel(restComp, "bulkClientIdInProduction", null, null);
         this.textProductionBulkClientID = new Text(restComp, SWT.NONE);
         data = new GridData(GridData.FILL_HORIZONTAL);
         textProductionBulkClientID.setLayoutData(data);
-        clientId = config.getOAuthEnvironmentString(Config.OAUTH_PROD_ENVIRONMENT_VAL, Config.OAUTH_PARTIAL_BULK_CLIENTID);
+        clientId = config.getOAuthEnvironmentString(Config.PROD_ENVIRONMENT_VAL, Config.OAUTH_PARTIAL_BULK_CLIENTID);
         this.textProductionBulkClientID.setText(clientId);
         
-        Label clientIdInSandboxText = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        clientIdInSandboxText.setText(Labels.getString("AdvancedSettingsDialog.partnerClientIdInSandbox"));
-        clientIdInSandboxText.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
+        createLabel(restComp, "partnerClientIdInSandbox", null, null);
         this.textSandboxPartnerClientID = new Text(restComp, SWT.NONE);
         data = new GridData(GridData.FILL_HORIZONTAL);
         textSandboxPartnerClientID.setLayoutData(data);
-    	clientId = config.getOAuthEnvironmentString(Config.OAUTH_SB_ENVIRONMENT_VAL, Config.OAUTH_PARTIAL_PARTNER_CLIENTID);
+    	clientId = config.getOAuthEnvironmentString(Config.SB_ENVIRONMENT_VAL, Config.OAUTH_PARTIAL_PARTNER_CLIENTID);
     	this.textSandboxPartnerClientID.setText(clientId);
         
-        clientIdInSandboxText = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        clientIdInSandboxText.setText(Labels.getString("AdvancedSettingsDialog.bulkClientIdInSandbox"));
-        clientIdInSandboxText.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
+    	createLabel(restComp, "bulkClientIdInSandbox", null, null);
         this.textSandboxBulkClientID = new Text(restComp, SWT.NONE);
         data = new GridData(GridData.FILL_HORIZONTAL);
         textSandboxBulkClientID.setLayoutData(data);
-        clientId = config.getOAuthEnvironmentString(Config.OAUTH_SB_ENVIRONMENT_VAL, Config.OAUTH_PARTIAL_BULK_CLIENTID);
+        clientId = config.getOAuthEnvironmentString(Config.SB_ENVIRONMENT_VAL, Config.OAUTH_PARTIAL_BULK_CLIENTID);
         this.textSandboxBulkClientID.setText(clientId);       
         //////////////////////////////////////////////////
         //Row to start At
@@ -740,7 +793,7 @@ public class AdvancedSettingsDialog extends BaseDialog {
             lastBatch = "0"; //$NON-NLS-1$
         }
 
-        Label labelRowToStart = new Label(restComp, SWT.RIGHT | SWT.WRAP);
+        Text labelRowToStart = createLabel(restComp, "startRow", null, null);
         labelRowToStart.setText(Labels.getString("AdvancedSettingsDialog.startRow")
                 + "\n("
                 + Labels.getFormattedString("AdvancedSettingsDialog.lastBatch", lastBatch)
@@ -763,23 +816,19 @@ public class AdvancedSettingsDialog extends BaseDialog {
 
         // now that we've created all the buttons, make sure that buttons dependent on the bulk api
         // setting are enabled or disabled appropriately
-        setBulkSettings(useBulkAPI);
+       // enableBulkRelatedOptions(useBulkAPI);
         
         blankAgain = new Label(restComp, SWT.NONE);
         data = new GridData();
         data.horizontalSpan = 2;
         blankAgain.setLayoutData(data);
         
-        Label closeWizardOnFinishCheckboxText = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        closeWizardOnFinishCheckboxText.setText(Labels.getString("AdvancedSettingsDialog.closeWizardOnFinish"));
-        closeWizardOnFinishCheckboxText.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
+        createLabel(restComp, "closeWizardOnFinish", null, null);
         boolean closeWizardOnFinish = config.getBoolean(Config.WIZARD_CLOSE_ON_FINISH);
         buttonCloseWizardOnFinish = new Button(restComp, SWT.CHECK);
         buttonCloseWizardOnFinish.setSelection(closeWizardOnFinish);
 
-        Label labelWizardWidthAndHeight = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelWizardWidthAndHeight.setText(Labels.getString("AdvancedSettingsDialog.wizardWidthAndHeight"));
-        labelWizardWidthAndHeight.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
+        createLabel(restComp, "wizardWidthAndHeight", null, null);
         Composite widthAndHeightComp = new Composite(restComp,  SWT.NONE);
         data = new GridData(GridData.FILL_BOTH);
         widthAndHeightComp.setLayoutData(data);
@@ -814,9 +863,7 @@ public class AdvancedSettingsDialog extends BaseDialog {
             }
         });
 
-        Label populateResultsFolderOnWizardFinishStepText = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        populateResultsFolderOnWizardFinishStepText.setText(Labels.getString("AdvancedSettingsDialog.populateResultsFolderOnFinishStepOfWizard"));
-        populateResultsFolderOnWizardFinishStepText.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
+        createLabel(restComp, "populateResultsFolderOnFinishStepOfWizard", null, null);
         boolean populateResultsFolderOnFinishStep = config.getBoolean(Config.WIZARD_POPULATE_RESULTS_FOLDER_WITH_PREVIOUS_OP_RESULTS_FOLDER);
         buttonPopulateResultsFolderOnWizardFinishStep = new Button(restComp, SWT.CHECK);
         buttonPopulateResultsFolderOnWizardFinishStep.setSelection(populateResultsFolderOnFinishStep);
@@ -825,22 +872,17 @@ public class AdvancedSettingsDialog extends BaseDialog {
         data = new GridData();
         data.horizontalSpan = 2;
         blankAgain.setLayoutData(data);
-        
-        Label labelLoggingConfigFile = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelLoggingConfigFile.setText(Labels.getString("AdvancedSettingsDialog.loggingConfigFile")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelLoggingConfigFile.setLayoutData(data);
-        
-        String log4j2ConfFile = LoggingUtil.getLoggingConfigFile();
-        Text textLoggingFileName = new Text(restComp, SWT.LEFT);
-        textLoggingFileName.setText(log4j2ConfFile); //$NON-NLS-1$
-        textLoggingFileName.setEditable(false);
-        
-        Label labelLoggingLevel = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelLoggingLevel.setText(Labels.getString("AdvancedSettingsDialog.loggingLevel")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelLoggingLevel.setLayoutData(data);
 
+        createLabel(restComp, "configDir", null, null);
+        Text textConfigDirLocation = new Text(restComp, SWT.LEFT | SWT.READ_ONLY);
+        textConfigDirLocation.setText(AppUtil.getConfigurationsDir()); //$NON-NLS-1$
+
+        createLabel(restComp, "loggingConfigFile", null, null);
+        String log4j2ConfFile = LoggingUtil.getLoggingConfigFile();
+        Text textLoggingFileName = new Text(restComp, SWT.LEFT | SWT.READ_ONLY);
+        textLoggingFileName.setText(log4j2ConfFile); //$NON-NLS-1$
+        
+        createLink(restComp, "loggingLevel", null, null);
         comboLoggingLevelDropdown = new Combo(restComp, SWT.DROP_DOWN);
         comboLoggingLevelDropdown.setItems(LOGGING_LEVEL);
         String currentLoggingLevel = LoggingUtil.getLoggingLevel().toUpperCase();
@@ -862,21 +904,9 @@ public class AdvancedSettingsDialog extends BaseDialog {
             comboLoggingLevelDropdown.setEnabled(false); // Can't modify current setting
         }
 
-        Label labelConfigDir = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelConfigDir.setText(Labels.getString("AdvancedSettingsDialog.configDir")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelConfigDir.setLayoutData(data);
-        Text textConfigDirLocation = new Text(restComp, SWT.LEFT);
-        textConfigDirLocation.setText(AppUtil.getConfigurationsDir()); //$NON-NLS-1$
-        textConfigDirLocation.setEditable(false);
-
-        Label labelLoggingFile = new Label(restComp, SWT.RIGHT | SWT.WRAP);
-        labelLoggingFile.setText(Labels.getString("AdvancedSettingsDialog.latestLoggingFile")); //$NON-NLS-1$
-        data = new GridData(GridData.HORIZONTAL_ALIGN_END);
-        labelLoggingFile.setLayoutData(data);
-        Text textLoggingFileLocation = new Text(restComp, SWT.LEFT);
+        createLabel(restComp, "latestLoggingFile", null, null);
+        Text textLoggingFileLocation = new Text(restComp, SWT.LEFT | SWT.READ_ONLY);
         textLoggingFileLocation.setText(LoggingUtil.getLatestLoggingFile()); //$NON-NLS-1$
-        textLoggingFileLocation.setEditable(false);
 
         //the bottow separator
         Label labelSeparatorBottom = new Label(sc, SWT.SEPARATOR | SWT.HORIZONTAL);
@@ -906,20 +936,33 @@ public class AdvancedSettingsDialog extends BaseDialog {
             public void widgetSelected(SelectionEvent event) {
                 Config config = getController().getConfig();
 
-                String currentTextEndpoint = textEndpoint.getText();
-                if (currentTextEndpoint != null && !currentTextEndpoint.isEmpty() && !isValidHttpsUrl(currentTextEndpoint)) {
+                String currentTextProdEndpoint = textProdEndpoint.getText();
+                if (currentTextProdEndpoint != null 
+                        && !currentTextProdEndpoint.isEmpty() 
+                        && !AppUtil.isValidHttpsUrl(currentTextProdEndpoint)) {
                     MessageDialog alert = new MessageDialog(getParent().getShell(), "Warning", null,
-                            Labels.getFormattedString("AdvancedSettingsDialog.serverURLInfo", currentTextEndpoint),
+                            Labels.getFormattedString("AdvancedSettingsDialog.serverURLInfo", currentTextProdEndpoint),
+                            MessageDialog.ERROR, new String[]{"OK"}, 0);
+                    alert.open();
+                    return;
+
+                }
+                String currentTextSBEndpoint = textProdEndpoint.getText();
+                if (currentTextSBEndpoint != null 
+                        && !currentTextSBEndpoint.isEmpty() 
+                        && !AppUtil.isValidHttpsUrl(currentTextSBEndpoint)) {
+                    MessageDialog alert = new MessageDialog(getParent().getShell(), "Warning", null,
+                            Labels.getFormattedString("AdvancedSettingsDialog.serverURLInfo", currentTextSBEndpoint),
                             MessageDialog.ERROR, new String[]{"OK"}, 0);
                     alert.open();
                     return;
 
                 }
                 //set the configValues
-                config.setValue(Config.HIDE_WELCOME_SCREEN, buttonHideWelcomeScreen.getSelection());
+                config.setValue(Config.HIDE_WELCOME_SCREEN, !buttonShowWelcomeScreen.getSelection());
                 config.setValue(Config.SHOW_LOADER_UPGRADE_SCREEN, buttonShowLoaderUpgradeScreen.getSelection());
                 config.setValue(Config.INSERT_NULLS, buttonNulls.getSelection());
-                config.setValue(Config.LOAD_BATCH_SIZE, textBatch.getText());
+                config.setValue(Config.IMPORT_BATCH_SIZE, textImportBatchSize.getText());
                 boolean isOtherDelimiterSpecified = textUploadCSVDelimiterValue.getText() != null
                                                     && textUploadCSVDelimiterValue.getText().length() != 0;
                 if (!buttonCsvComma.getSelection()
@@ -941,11 +984,11 @@ public class AdvancedSettingsDialog extends BaseDialog {
                 config.setValue(Config.CSV_DELIMITER_TAB, buttonCsvTab.getSelection());
                 config.setValue(Config.CSV_DELIMITER_OTHER, isOtherDelimiterSpecified);
 
-                config.setValue(Config.EXTRACT_REQUEST_SIZE, textQueryBatch.getText());
-                config.setValue(Config.ENDPOINT, currentTextEndpoint);
+                config.setValue(Config.EXPORT_BATCH_SIZE, textExportBatchSize.getText());
+                config.setAuthEndpointForEnv(currentTextProdEndpoint, Config.PROD_ENVIRONMENT_VAL);
+                config.setAuthEndpointForEnv(currentTextSBEndpoint, Config.SB_ENVIRONMENT_VAL);
                 config.setValue(Config.ASSIGNMENT_RULE, textRule.getText());
                 config.setValue(Config.LOAD_ROW_TO_START_AT, textRowToStart.getText());
-                config.setValue(Config.RESET_URL_ON_LOGIN, buttonResetUrl.getSelection());
                 config.setValue(Config.NO_COMPRESSION, buttonCompression.getSelection());
                 config.setValue(Config.TRUNCATE_FIELDS, buttonTruncateFields.getSelection());
                 config.setValue(Config.FORMAT_PHONE_FIELDS, buttonFormatPhoneFields.getSelection());
@@ -963,9 +1006,13 @@ public class AdvancedSettingsDialog extends BaseDialog {
                 config.setValue(Config.PROXY_USERNAME, textProxyUsername.getText());
                 config.setValue(Config.PROXY_NTLM_DOMAIN, textProxyNtlmDomain.getText());
                 config.setValue(Config.PROCESS_KEEP_ACCOUNT_TEAM, buttonKeepAccountTeam.getSelection());
+                config.setValue(Config.UPDATE_WITH_EXTERNALID, buttonUpdateWithExternalId.getSelection());
                 config.setValue(Config.CACHE_DESCRIBE_GLOBAL_RESULTS, buttonCacheDescribeGlobalResults.getSelection());
                 config.setValue(Config.INCLUDE_RICH_TEXT_FIELD_DATA_IN_QUERY_RESULTS, buttonIncludeRTFBinaryDataInQueryResults.getSelection());
-                config.setValue(Config.BULK_API_ENABLED, buttonUseBulkApi.getSelection());
+
+                // Config requires Bulk API AND Bulk V2 API settings enabled to use Bulk V2 features
+                // This is different from UI. UI shows them as mutually exclusive.
+                config.setValue(Config.BULK_API_ENABLED, buttonUseBulkV1Api.getSelection());
                 config.setValue(Config.BULK_API_SERIAL_MODE, buttonBulkApiSerialMode.getSelection());
                 config.setValue(Config.BULK_API_ZIP_CONTENT, buttonBulkApiZipContent.getSelection());
                 config.setValue(Config.BULKV2_API_ENABLED, buttonUseBulkV2Api.getSelection());
@@ -978,7 +1025,7 @@ public class AdvancedSettingsDialog extends BaseDialog {
                 LoggingUtil.setLoggingLevel(LOGGING_LEVEL[comboLoggingLevelDropdown.getSelectionIndex()]);
                 String clientIdVal = textProductionPartnerClientID.getText();
                 if (clientIdVal != null && !clientIdVal.strip().isEmpty()) {
-                    String propName = Config.OAUTH_PREFIX + Config.OAUTH_PROD_ENVIRONMENT_VAL + "." + Config.OAUTH_PARTIAL_PARTNER_CLIENTID;
+                    String propName = Config.OAUTH_PREFIX + Config.PROD_ENVIRONMENT_VAL + "." + Config.OAUTH_PARTIAL_PARTNER_CLIENTID;
                     String currentClientIdVal = config.getString(propName);
                     if (!clientIdVal.equals(currentClientIdVal)) {
                         config.setValue(propName, clientIdVal);
@@ -987,7 +1034,7 @@ public class AdvancedSettingsDialog extends BaseDialog {
                 }
                 clientIdVal = textSandboxPartnerClientID.getText();
                 if (clientIdVal != null && !clientIdVal.strip().isEmpty()) {
-                    String propName = Config.OAUTH_PREFIX + Config.OAUTH_SB_ENVIRONMENT_VAL + "." + Config.OAUTH_PARTIAL_PARTNER_CLIENTID;
+                    String propName = Config.OAUTH_PREFIX + Config.SB_ENVIRONMENT_VAL + "." + Config.OAUTH_PARTIAL_PARTNER_CLIENTID;
                     String currentClientIdVal = config.getString(propName);
                     if (!clientIdVal.equals(currentClientIdVal)) {
                     	config.setValue(propName, clientIdVal);
@@ -996,7 +1043,7 @@ public class AdvancedSettingsDialog extends BaseDialog {
                 }
                 clientIdVal = textProductionBulkClientID.getText();
                 if (clientIdVal != null && !clientIdVal.strip().isEmpty()) {
-                    String propName = Config.OAUTH_PREFIX + Config.OAUTH_PROD_ENVIRONMENT_VAL + "." + Config.OAUTH_PARTIAL_BULK_CLIENTID;
+                    String propName = Config.OAUTH_PREFIX + Config.PROD_ENVIRONMENT_VAL + "." + Config.OAUTH_PARTIAL_BULK_CLIENTID;
                     String currentClientIdVal = config.getString(propName);
                     if (!clientIdVal.equals(currentClientIdVal)) {
                         config.setValue(propName, clientIdVal);
@@ -1005,7 +1052,7 @@ public class AdvancedSettingsDialog extends BaseDialog {
                 }
                 clientIdVal = textSandboxBulkClientID.getText();
                 if (clientIdVal != null && !clientIdVal.strip().isEmpty()) {
-                    String propName = Config.OAUTH_PREFIX + Config.OAUTH_SB_ENVIRONMENT_VAL + "." + Config.OAUTH_PARTIAL_BULK_CLIENTID;
+                    String propName = Config.OAUTH_PREFIX + Config.SB_ENVIRONMENT_VAL + "." + Config.OAUTH_PARTIAL_BULK_CLIENTID;
                     String currentClientIdVal = config.getString(propName);
                     if (!clientIdVal.equals(currentClientIdVal)) {
                         config.setValue(propName, clientIdVal);
@@ -1013,6 +1060,7 @@ public class AdvancedSettingsDialog extends BaseDialog {
                     }
                 }
                 getController().saveConfig();
+                getController().getLoaderWindow().refresh();
                 shell.close();
             }
         });
@@ -1062,10 +1110,18 @@ public class AdvancedSettingsDialog extends BaseDialog {
         // Expand both horizontally and vertically
         sc.setExpandHorizontal(true);
         sc.setExpandVertical(true);
+        shell.redraw();
+    }
+    
+    private String getImportBatchLimitsURL() {
+        if (this.useBulkAPI || this.useBulkV2API) {
+            return "https://developer.salesforce.com/docs/atlas.en-us.salesforce_app_limits_cheatsheet.meta/salesforce_app_limits_cheatsheet/salesforce_app_limits_platform_bulkapi.htm";
+        }
+        return "https://developer.salesforce.com/docs/atlas.en-us.salesforce_app_limits_cheatsheet.meta/salesforce_app_limits_cheatsheet/salesforce_app_limits_platform_apicalls.htm";
     }
 
     private Text createTimezoneTextInput(Composite parent, String labelKey, String configKey, String defaultValue, int widthHint) {
-        createLabel(parent, labelKey);
+        createLink(parent, labelKey, null, null);
         
         Composite timezoneComp = new Composite(parent, SWT.RIGHT);
         GridData data = new GridData(GridData.FILL_BOTH);
@@ -1092,11 +1148,42 @@ public class AdvancedSettingsDialog extends BaseDialog {
         });
         return t;
     }
-
-
-    private void createLabel(Composite parent, String labelKey) {
-        Label l = new Label(parent, SWT.RIGHT | SWT.WRAP);
-        l.setLayoutData(new GridData(GridData.HORIZONTAL_ALIGN_END));
-        l.setText(Labels.getString(labelKey));
+    
+    private Text createLabel(Composite parent, String labelKey, String[] args, String tooltipKey) {
+        Text l = new Text(parent, SWT.RIGHT | SWT.WRAP | SWT.READ_ONLY);
+        GridData data = new GridData(GridData.HORIZONTAL_ALIGN_END);
+        data.grabExcessHorizontalSpace = true;
+        l.setLayoutData(data);
+        l.setText(Labels.getFormattedString(AdvancedSettingsDialog.class.getSimpleName() + "." + labelKey, args)
+                );
+        if (tooltipKey != null) {
+            l.setToolTipText(Labels.getString(AdvancedSettingsDialog.class.getSimpleName() + "." + tooltipKey));
+        }
+        l.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                URLUtil.openURL(e.text);
+            }
+        });
+        return l;
+    }
+    
+    private Link createLink(Composite parent, String labelKey, String[] args, String tooltipKey) {
+        Link l = new Link(parent, SWT.RIGHT | SWT.MULTI);
+        GridData data = new GridData(GridData.HORIZONTAL_ALIGN_END);
+        data.grabExcessHorizontalSpace = true;
+        l.setLayoutData(data);
+        l.setText(Labels.getFormattedString(this.getClass().getSimpleName() + "." + labelKey, args)
+                );
+        if (tooltipKey != null) {
+            l.setToolTipText(Labels.getString(this.getClass().getSimpleName() + "." + tooltipKey));
+        }
+        l.addSelectionListener(new SelectionAdapter() {
+            @Override
+            public void widgetSelected(SelectionEvent e) {
+                URLUtil.openURL(e.text);
+            }
+        });
+        return l;
     }
 }

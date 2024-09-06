@@ -100,7 +100,6 @@ public class ProcessRunner implements InitializingBean, IProcess {
     
     private static final String PROP_NAME_ARRAY[] = {
             Config.OPERATION,
-            Config.ENDPOINT,
             Config.USERNAME,
             Config.PASSWORD,
             Config.DAO_TYPE,
@@ -153,15 +152,11 @@ public class ProcessRunner implements InitializingBean, IProcess {
                 controller.setStatusFiles(config.getString(Config.OUTPUT_STATUS_DIR), true, false);
             }
 
-            logger.info(Messages.getFormattedString("Process.loggingIn", config.getString(Config.ENDPOINT))); //$NON-NLS-1$
+            logger.info(Messages.getFormattedString("Process.loggingIn", config.getAuthEndpoint())); //$NON-NLS-1$
             if (controller.login()) {
                 // get the field info (using the describe call)
                 logger.info(Messages.getString("Process.settingFieldTypes")); //$NON-NLS-1$
                 controller.setFieldTypes();
-
-                // get the object reference info (using the describe call)
-                logger.info(Messages.getString("Process.settingReferenceTypes")); //$NON-NLS-1$
-                controller.setReferenceDescribes();
 
                 // instantiate the map
                 logger.info(Messages.getString("Process.creatingMap")); //$NON-NLS-1$

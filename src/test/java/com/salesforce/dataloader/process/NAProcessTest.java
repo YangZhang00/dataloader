@@ -150,7 +150,8 @@ public class NAProcessTest extends ProcessTestBase {
         generateCsvWithNAField(nullFieldName, taskId);
         Map<String, String> argMap = getArgMap(operation);
         Controller controller;
-        if (!getController().getConfig().getBoolean(Config.BULK_API_ENABLED) && isDateField) {
+        Config config = getController().getConfig();
+        if (!config.isBulkAPIEnabled() && !config.isBulkV2APIEnabled() && isDateField) {
             controller = runProcess(argMap, true, null, 0, 0, 1, false);
             String errorFile = controller.getConfig().getStringRequired(Config.OUTPUT_ERROR);
             String errorMessage = getCsvFieldValue(errorFile, "ERROR");
@@ -192,7 +193,7 @@ public class NAProcessTest extends ProcessTestBase {
     private Map<String, String> getArgMap(OperationInfo operation) {
         Map<String, String> argMap = getTestConfig(operation, CSV_FILE_PATH, getTestDataDir() + File.separator + "NAProcessTest.sdl", false);
         argMap.put(Config.ENTITY, "Task");
-        argMap.remove(Config.EXTERNAL_ID_FIELD);
+        argMap.remove(Config.IDLOOKUP_FIELD);
         return argMap;
     }
 

@@ -26,6 +26,7 @@
 
 package com.salesforce.dataloader.action.visitor;
 
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 
@@ -41,8 +42,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.salesforce.dataloader.action.progress.ILoaderProgress;
+import com.salesforce.dataloader.client.PartnerClient;
 import com.salesforce.dataloader.client.SessionInfo;
 import com.salesforce.dataloader.config.Config;
+import com.salesforce.dataloader.config.LastRun;
 import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.dao.DataReader;
@@ -52,6 +55,7 @@ import com.salesforce.dataloader.exception.*;
 import com.salesforce.dataloader.mapping.LoadMapper;
 import com.sforce.async.AsyncApiException;
 import com.sforce.soap.partner.DescribeSObjectResult;
+import com.sforce.soap.partner.Error;
 import com.sforce.soap.partner.Field;
 import com.sforce.soap.partner.FieldType;
 import com.sforce.soap.partner.fault.ApiFault;
@@ -69,6 +73,7 @@ public abstract class DAOLoadVisitor extends AbstractVisitor implements DAORowVi
 
     // this stores the dynabeans, which convert types correctly
     protected final List<DynaBean> dynaArray;
+    protected int dynaArraySize = 0;
     private HashMap<Integer, Boolean> rowConversionFailureMap;
 
     protected BasicDynaClass dynaClass = null;
@@ -84,6 +89,7 @@ public abstract class DAOLoadVisitor extends AbstractVisitor implements DAORowVi
     // - https://www.geeksforgeeks.org/how-to-validate-html-tag-using-regular-expression/#
     public static final String DEFAULT_RICHTEXT_REGEX = "<(?=[a-zA-Z/])(\"[^\"]*\"|'[^']*'|[^'\">])*>";
     private String richTextRegex = DEFAULT_RICHTEXT_REGEX;
+    private Field[] cachedFieldAttributesForOperation = null;
     
     protected DAOLoadVisitor(Controller controller, ILoaderProgress monitor, DataWriter successWriter,
             DataWriter errorWriter) {
@@ -91,11 +97,16 @@ public abstract class DAOLoadVisitor extends AbstractVisitor implements DAORowVi
 
         this.columnNames = ((DataReader)controller.getDao()).getColumnNames();
 
-        dynaArray = new LinkedList<DynaBean>();
-
+        List<DynaBean> dynaList = null;
+        try {
+            dynaList = new ArrayList<DynaBean>(((DataReader)controller.getDao()).getTotalRows());
+        } catch (DataAccessObjectException e) {
+            dynaList = new ArrayList<DynaBean>();
+        }
+        dynaArray = dynaList;
         SforceDynaBean.registerConverters(getConfig());
 
-        this.batchSize = getConfig().getLoadBatchSize();
+        this.batchSize = getConfig().getImportBatchSize();
         rowConversionFailureMap = new HashMap<Integer, Boolean>();
         String newRichTextRegex = getConfig().getString(Config.RICH_TEXT_FIELD_REGEX);
         if (newRichTextRegex != null && !newRichTextRegex.isBlank()) {
@@ -133,13 +144,54 @@ public abstract class DAOLoadVisitor extends AbstractVisitor implements DAORowVi
     @Override
     public boolean visit(Row row) throws OperationException, DataAccessObjectException,
     ConnectionException {
-        if (controller.getConfig().getBoolean(Config.PROCESS_BULK_CACHE_DATA_FROM_DAO)
-            || !controller.getConfig().getBoolean(Config.BULK_API_ENABLED)) {
-            // either batch mode or cache bulk data uploaded from DAO
+        Config config = controller.getConfig();
+        if (config.getBoolean(Config.PROCESS_BULK_CACHE_DATA_FROM_DAO)
+            || (!config.isBulkAPIEnabled() && !config.isBulkV2APIEnabled())) {
+            // either bulk mode or cache bulk data uploaded from DAO
             this.daoRowList.add(row);
         }
         // the result are sforce fields mapped to data
         Row sforceDataRow = getMapper().mapData(row);
+        
+        if (this.getConfig().getBoolean(Config.TRUNCATE_FIELDS)
+            && this.getConfig().isRESTAPIEnabled()
+            && "update".equalsIgnoreCase(this.getConfig().getString(Config.OPERATION))) {
+            PartnerClient partnerClient = this.getController().getPartnerClient();
+            if (cachedFieldAttributesForOperation == null) {
+                cachedFieldAttributesForOperation = partnerClient.getSObjectFieldAttributesForRow(
+                                this.getConfig().getString(Config.ENTITY), sforceDataRow);
+            }
+            for (Map.Entry<String, Object> field : sforceDataRow.entrySet()) {
+                for (Field fieldDescribe : cachedFieldAttributesForOperation) {
+                    // Field truncation is applicable to certain field types only.
+                    // See https://developer.salesforce.com/docs/atlas.en-us.api_tooling.meta/api_tooling/sforce_api_header_allowfieldtruncation.htm
+                    // for the list of field types that field truncation is applicable to.
+                    FieldType type = fieldDescribe.getType();
+                    if (fieldDescribe.getName().equalsIgnoreCase(field.getKey())
+                            && (type == FieldType.email
+                               || type == FieldType.string
+                               || type == FieldType.picklist
+                               || type == FieldType.phone
+                               || type == FieldType.textarea
+                               || type == FieldType.multipicklist)
+                        ) {
+                        int fieldLength = fieldDescribe.getLength();
+                        if (field.getValue().toString().length() > fieldLength) {
+                            if (type == FieldType.email) {
+                                String[] emailParts = field.getValue().toString().split("@");
+                                if (emailParts.length == 2) {
+                                    String firstPart = emailParts[0].substring(0,
+                                            fieldLength - emailParts[1].length() - 1);
+                                    field.setValue(firstPart + "@" + emailParts[1]);
+                                    continue;
+                                }
+                            }
+                            field.setValue(field.getValue().toString().substring(0, fieldLength));
+                        }
+                    }
+                }
+            }
+        }
         
         // Make sure to initialize dynaClass only after mapping a row.
         // This is to make sure that all polymorphic field mappings specified
@@ -159,6 +211,7 @@ public abstract class DAOLoadVisitor extends AbstractVisitor implements DAORowVi
                     // see if any entity foreign key references are embedded here
                     Object value = this.getFieldValue(fName, dynaBean.get(fName));
                     dynaBean.set(fName, value);
+                    dynaArraySize += fName.length() + value.toString().length();
                 }
             }
             dynaArray.add(dynaBean);
@@ -209,6 +262,8 @@ public abstract class DAOLoadVisitor extends AbstractVisitor implements DAORowVi
         if (dynaArray.size() > 0) {
             loadBatch();
         }
+        // clear the caches
+        cachedFieldAttributesForOperation = null;
     }
 
     protected abstract void loadBatch() throws DataAccessObjectException, OperationException;
@@ -231,7 +286,7 @@ public abstract class DAOLoadVisitor extends AbstractVisitor implements DAORowVi
                 msg = ((ApiFault)t).getExceptionMessage();
             }
         }
-        throw new LoadException(msg, t);
+        throw new LoadExceptionOnServer(msg, t);
     }
 
     protected void handleException(Throwable t) throws LoadException {
@@ -381,5 +436,38 @@ public abstract class DAOLoadVisitor extends AbstractVisitor implements DAORowVi
             localeStr = sessionInfo.getUserInfoResult().getUserLocale();
         }
         return DAORowUtil.getPhoneFieldValue((String)fieldValue, localeStr);
+    }
+    
+
+    protected void processResult(Row dataRow, boolean isSuccess, String id, Error[] errors)
+            throws DataAccessObjectException {
+        // process success vs. error
+        // extract error message from error result
+        if (isSuccess) {
+            writeSuccess(dataRow, id, null);
+        } else {
+            writeError(dataRow,
+                    errors == null ? Messages.getString("Visitor.noErrorReceivedMsg") : errors[0].getMessage());
+        }
+    }
+    
+    protected void setLastRunProperties(Object[] results) throws LoadException {
+        // set the last processed row number in the config (*_lastRun.properties) file
+        int currentProcessed;
+        try {
+            currentProcessed = getConfig().getInt(LastRun.LAST_LOAD_BATCH_ROW);
+        } catch (ParameterLoadException e) {
+            // if there's a problem getting last batch row, start at the beginning
+            currentProcessed = 0;
+        }
+        currentProcessed += results.length;
+        getConfig().setValue(LastRun.LAST_LOAD_BATCH_ROW, currentProcessed);
+        try {
+            getConfig().saveLastRun();
+        } catch (IOException e) {
+            String errMsg = Messages.getString("LoadAction.errorLastRun");
+            getLogger().error(errMsg, e);
+            handleException(errMsg, e);
+        }
     }
 }

@@ -29,8 +29,7 @@ package com.salesforce.dataloader.client;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
-import com.salesforce.dataloader.action.visitor.BulkV1Connection;
-import com.salesforce.dataloader.config.Config;
+import com.salesforce.dataloader.action.visitor.bulk.BulkV1Connection;
 import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.controller.Controller;
 import com.sforce.async.AsyncApiException;
@@ -42,25 +41,18 @@ import com.sforce.ws.ConnectorConfig;
  * @author Colin Jarvis
  * @since 17.0
  */
-public class BulkV1Client extends ClientBase<BulkV1Connection> {
+public class BulkV1Client extends RESTClient<BulkV1Connection> {
     private static Logger LOG = LogManager.getLogger(BulkV1Client.class);
-    private BulkV1Connection connection;
-    private ConnectorConfig connectorConfig = null;
 
     public BulkV1Client(Controller controller) {
         super(controller, LOG);
     }
 
     @Override
-    public BulkV1Connection getConnection() {
-        return connection;
-    }
-
-    @Override
     protected boolean connectPostLogin(ConnectorConfig cc) {
         try {
             // Set up a connection object with the given config
-            this.connection = new BulkV1Connection(cc);
+            setConnection(new BulkV1Connection(cc));
         } catch (AsyncApiException e) {
             logger.error(Messages.getMessage(getClass(), "loginError", cc.getAuthEndpoint(), e.getExceptionMessage()),
                     e);
@@ -70,17 +62,13 @@ public class BulkV1Client extends ClientBase<BulkV1Connection> {
         return true;
     }
 
-    @Override
-    public synchronized ConnectorConfig getConnectorConfig() {
-        if (this.connectorConfig == null || !this.config.getBoolean(Config.REUSE_CLIENT_CONNECTION)) {
-            this.connectorConfig = super.getConnectorConfig();
-            this.connectorConfig.setTraceMessage(config.getBoolean(Config.WIRE_OUTPUT));
-        }
-        return this.connectorConfig;
-    }
-    
     public static String getServicePath() {
-        return ClientBase.getServicePathWithAPIVersion(BULKV1_ENDPOINT_PATH);
+        return "/services/async/" + getAPIVersionForTheSession() + "/";
+    }
+
+    @Override
+    public String getServiceURLPath() {
+        return getServicePath();
     }
 
 }

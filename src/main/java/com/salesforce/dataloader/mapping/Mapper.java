@@ -31,6 +31,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
@@ -38,6 +40,8 @@ import java.util.Set;
 import java.util.StringTokenizer;
 
 import com.sforce.soap.partner.Field;
+import com.sforce.soap.partner.FieldType;
+
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
@@ -46,6 +50,7 @@ import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.exception.MappingInitializationException;
 import com.salesforce.dataloader.model.Row;
 import com.salesforce.dataloader.util.AppUtil;
+import com.salesforce.dataloader.util.OrderedProperties;
 
 /**
  * Base class for field name mappers. Used by data loader operations to map between local field names and sfdc field
@@ -73,19 +78,22 @@ public abstract class Mapper {
         }
     }
 
-    private final CaseInsensitiveSet daoColumns;
+    protected final CaseInsensitiveSet daoColumnNames = new CaseInsensitiveSet();
+    
+    private HashMap<String, Integer> compositeColSizeMap = new HashMap<String, Integer>();
+    private HashMap<String, Integer> daoColPositionInCompositeColMap = new HashMap<String, Integer>();
+    private HashMap<String, String> daoColToCompositeColMap = new HashMap<String, String>();
+    private HashMap<String, Boolean> fieldTypeIsStringMap = new HashMap<String, Boolean>();
     private final CaseInsensitiveMap constants = new CaseInsensitiveMap();
 
     protected final CaseInsensitiveMap map = new CaseInsensitiveMap();
     private final PartnerClient client;
-    private final CaseInsensitiveSet fields;
+    private final CaseInsensitiveSet fields = new CaseInsensitiveSet();
     protected final String mappingFileName;
 
     protected Mapper(PartnerClient client, Collection<String> columnNames, Field[] fields, String mappingFileName)
             throws MappingInitializationException {
         this.client = client;
-        this.fields = new CaseInsensitiveSet();
-        CaseInsensitiveSet daoColumns = new CaseInsensitiveSet();
         if (columnNames != null) {
             int i = 0;
             for (String colName : columnNames) {
@@ -95,22 +103,35 @@ public abstract class Mapper {
                     logger.error(errorMsg);
                     throw new MappingInitializationException(errorMsg);
                 }
-                daoColumns.add(colName);
+                daoColumnNames.add(colName);
+                daoColPositionInCompositeColMap.put(colName, 0);
+                daoColToCompositeColMap.put(colName, colName);
+                compositeColSizeMap.put(colName, 1);
             }
         }
-        this.daoColumns = daoColumns;
         if (fields != null) {
             for (Field field : fields) {
+                boolean isStringType = true;
                 this.fields.add(field.getName());
+                FieldType fieldType = field.getType();
+                if (fieldType == FieldType.string
+                        || fieldType == FieldType.textarea) {
+                    isStringType = true;
+                } else {
+                    isStringType = false;
+                }
+                this.fieldTypeIsStringMap.put(field.getName().toLowerCase(), isStringType);
             }
         }
         this.mappingFileName = mappingFileName;
         putPropertyFileMappings(mappingFileName);
     }
 
-    public final void putMapping(String src, String dest) {
+    public final void putMapping(String src, String destList) {
+        processCompositeDaoColName(src, destList);
+
         // destination can be multiple field names for upload operations
-        StringTokenizer st = new StringTokenizer(dest, AppUtil.COMMA);
+        StringTokenizer st = new StringTokenizer(destList, AppUtil.COMMA);
         String originalDestList = null;
         while(st.hasMoreElements()) {
             String v = st.nextToken();
@@ -122,7 +143,54 @@ public abstract class Mapper {
                 originalDestList = originalDestList + ", " + originalVal;
             }
         }
-        this.map.put(daoColumns.getOriginal(src), originalDestList);
+        this.map.put(src, originalDestList);
+    }
+    
+    private void processCompositeDaoColName(String mappingSrcStr, String destFieldList) {
+        boolean isDestinationListStringOnly = true;
+        StringTokenizer st = new StringTokenizer(destFieldList, AppUtil.COMMA);
+        while(st.hasMoreElements()) {
+            String destFieldName = st.nextToken();
+            destFieldName = destFieldName.trim();
+            Boolean destFieldTypeIsString = this.fieldTypeIsStringMap.get(destFieldName.toLowerCase());
+            if (destFieldTypeIsString == null || !destFieldTypeIsString) {
+                isDestinationListStringOnly = false;
+                logger.debug(destFieldName + " is not string or text area.");
+                break;
+            }
+        }
+
+        int daoColCount = 0;
+        st = new StringTokenizer(mappingSrcStr, AppUtil.COMMA);
+        while(st.hasMoreElements()) {
+            String mappingSrcCol = st.nextToken();
+            mappingSrcCol = mappingSrcCol.trim();
+            String daoCol = daoColumnNames.getOriginal(mappingSrcCol);
+            if (daoCol == null) {
+                logger.warn("Did not find DAO column with name " + mappingSrcCol + " specified in the mapping");
+                // unable to map mappingSrcStr to a daoCol
+                continue;
+            }
+            daoColPositionInCompositeColMap.put(daoCol, daoColCount);
+            daoColToCompositeColMap.put(daoCol, mappingSrcStr);
+            daoColCount++;
+            if (!isDestinationListStringOnly) {
+                // set up only the first daoCol for mapping if the destination
+                // field list contains a field whose type is not string
+                logger.debug("Using only the first CSV column '" + daoCol + "' for mapping because one of the sobject fields it is mapped to is not a string or a text area");
+                break; 
+            }
+        }
+        if (daoColCount == 0) {
+            String daoCol = daoColumnNames.getOriginal(mappingSrcStr);
+            if (daoCol == null) {
+                logger.warn("Did not find DAO column with name " + mappingSrcStr + " specified in the mapping");
+                return;
+            }
+            getDaoColToCompositeColMap().put(mappingSrcStr, mappingSrcStr);
+            daoColCount = 1;
+        }
+        compositeColSizeMap.put(mappingSrcStr, daoColCount);
     }
 
     protected void putConstant(String name, String value) {
@@ -147,7 +215,7 @@ public abstract class Mapper {
     }
 
     private Properties loadProperties(String fileName) throws MappingInitializationException {
-        Properties props = new Properties();
+        OrderedProperties props = new OrderedProperties();
         if (fileName != null && fileName.length() > 0) {
             try {
                 FileInputStream in = new FileInputStream(fileName);
@@ -170,6 +238,7 @@ public abstract class Mapper {
     }
 
     public void putPropertyFileMappings(Properties props) {
+        clearMappings();
         for (Entry<Object, Object> entry : props.entrySet()) {
             putPropertyEntry(entry);
         }
@@ -182,7 +251,7 @@ public abstract class Mapper {
     protected abstract void putPropertyEntry(Entry<Object, Object> entry);
 
     protected boolean hasDaoColumns() {
-        return !this.daoColumns.isEmpty();
+        return !this.daoColumnNames.isEmpty();
     }
 
     protected static boolean isConstant(String name) {
@@ -200,13 +269,25 @@ public abstract class Mapper {
         return this.map.values();
     }
 
-    public String getMapping(String srcName) {
-        return getMapping(srcName, false);
+    /*
+    public String getMapping(String srcName, boolean isSrcNameComposite) {
+        return getMapping(srcName, false, isSrcNameComposite);
     }
+    */
 
-    public String getMapping(String srcName, boolean strictMatching) {
-        if (map.containsKey(srcName)) {
-            return map.get(srcName);
+    public String getMapping(String srcName, boolean strictMatching, boolean isSrcNameComposite) {
+        String compositeColName = null;
+        if (isSrcNameComposite) {
+            compositeColName = srcName;
+        } else {
+            compositeColName = this.getDaoColToCompositeColMap().get(srcName);
+        }
+        if (compositeColName == null) {
+            // DAO column is not mapped, ignore
+            return null;
+        }
+        if (map.containsKey(compositeColName)) {
+            return map.get(compositeColName);
         }
         // handle aggregate queries
         if (!strictMatching) {
@@ -218,13 +299,19 @@ public abstract class Mapper {
         }
         return null;
     }
-    public void clearMap() {
+    public void clearMappings() {
         this.map.clear();
     }
 
     public void save(String filename) throws IOException {
         if (filename == null) throw new IOException(Messages.getMessage(getClass(), "errorFileName"));
         Properties props = new Properties();
+        for (String key : map.keySet()) {
+            String value = map.get(key);
+            if (value == null) {
+                map.put(key, "");
+            }
+        }
         props.putAll(this.map);
         FileOutputStream out = new FileOutputStream(filename);
         try {
@@ -235,7 +322,7 @@ public abstract class Mapper {
     }
 
     public boolean hasDaoColumn(String localName) {
-        return this.daoColumns.containsKey(localName);
+        return this.daoColumnNames.containsKey(localName);
     }
 
     public void removeMapping(String srcName) {
@@ -251,10 +338,28 @@ public abstract class Mapper {
     }
 
     protected Set<String> getDaoColumns() {
-        return this.daoColumns.getOriginalValues();
+        return this.daoColumnNames.getOriginalValues();
     }
 
     public PartnerClient getClient() {
         return client;
+    }
+
+    protected Set<String> getCompositeDAOColumns() {
+        HashSet<String> compositeDAOCols = new HashSet<String>();
+        compositeDAOCols.addAll(this.daoColToCompositeColMap.values());
+        return compositeDAOCols;
+    }
+
+    protected HashMap<String, Integer> getCompositeColSizeMap() {
+        return compositeColSizeMap;
+    }
+
+    protected HashMap<String, Integer> getDaoColPositionInCompositeColMap() {
+        return daoColPositionInCompositeColMap;
+    }
+
+    protected HashMap<String, String> getDaoColToCompositeColMap() {
+        return daoColToCompositeColMap;
     }
 }

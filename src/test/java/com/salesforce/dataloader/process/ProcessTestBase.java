@@ -336,7 +336,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         try {
             UpsertResult[] results = getBinding().upsert(
                     getController().getConfig().getString(
-                            Config.EXTERNAL_ID_FIELD), records);
+                            Config.IDLOOKUP_FIELD), records);
             String[] ids = new String[results.length];
             for (int i = 0; i < results.length; i++) {
                 UpsertResult result = results[i];
@@ -637,7 +637,12 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         res.put(Config.DAO_TYPE, isExtraction ? DataAccessObjectFactory.CSV_WRITE_TYPE
                 : DataAccessObjectFactory.CSV_READ_TYPE);
         res.put(Config.OUTPUT_STATUS_DIR, getTestStatusDir());
-        String apiType = isBulkAPIEnabled(res) || isBulkV2APIEnabled(res) ? "Bulk" : "Soap";
+        String apiType = "Soap";
+        if (isBulkAPIEnabled(res)) {
+            apiType = "Bulk";
+        } else if (isBulkV2APIEnabled(res)) {
+            apiType = "BulkV2";
+        }
         res.put(Config.OUTPUT_SUCCESS, getSuccessFilePath(apiType));
         res.put(Config.OUTPUT_ERROR, getErrorFilePath(apiType));
 
@@ -706,6 +711,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         if (argMap == null) argMap = getTestConfig();
         argMap.put(Config.PROCESS_THREAD_NAME, this.baseName);
         argMap.put(Config.READ_ONLY_CONFIG_PROPERTIES, Boolean.TRUE.toString());
+        argMap.put(Config.CLI_OPTION_RUN_MODE, Config.RUN_MODE_BATCH_VAL);
 
         // emulate invocation through process.bat script
         String[] args = new String[argMap.size()+1];
@@ -913,8 +919,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
     }
     
     protected boolean isBulkV2APIEnabled(Map<String, String> argMap) {
-        return isSettingEnabled(argMap, Config.BULK_API_ENABLED)
-                && isSettingEnabled(argMap, Config.BULKV2_API_ENABLED);
+        return isSettingEnabled(argMap, Config.BULKV2_API_ENABLED);
     }
     protected boolean isSettingEnabled(Map<String, String> argMap, String configKey) {
         return Config.TRUE.equalsIgnoreCase(argMap.get(configKey));
@@ -950,7 +955,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         final File mappingFile = new File(getTestDataDir(), fileNameBase + "Map.sdl");
         final Map<String, String> argMap = getTestConfig(isUpsert ? OperationInfo.upsert : OperationInfo.update,
                 updateFileName, mappingFile.getAbsolutePath(), false);
-        if (hasExtId) argMap.put(Config.EXTERNAL_ID_FIELD, extIdField);
+        if (hasExtId) argMap.put(Config.IDLOOKUP_FIELD, extIdField);
         return argMap;
     }
 
@@ -962,10 +967,11 @@ public abstract class ProcessTestBase extends ConfigTestBase {
     }
     
 
+    @SuppressWarnings("unchecked")
     protected UpsertResult[] doUpsert(String entity, Map<String, Object> sforceMapping) throws Exception {
         // now convert to a dynabean array for the client
         // setup our dynabeans
-        BasicDynaClass dynaClass = setupDynaClass(entity);
+        BasicDynaClass dynaClass = setupDynaClass(entity, (Collection<String>)(Collection<?>)(sforceMapping.values()));
 
         DynaBean sforceObj = dynaClass.newInstance();
 
@@ -990,7 +996,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
      * Make sure to set external id field
      */
     protected String setExtIdField(String extIdField) {
-        getController().getConfig().setValue(Config.EXTERNAL_ID_FIELD, extIdField);
+        getController().getConfig().setValue(Config.IDLOOKUP_FIELD, extIdField);
         return extIdField;
     }
 
@@ -1012,7 +1018,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         upsertSfdcRecords(entity, 2);
 
         // get the client and make the query call
-        String extIdField = getController().getConfig().getString(Config.EXTERNAL_ID_FIELD);
+        String extIdField = getController().getConfig().getString(Config.IDLOOKUP_FIELD);
         PartnerClient client = new PartnerClient(getController());
         // only get the records that have external id set, avoid nulls
         String soql = "select " + extIdField + " from " + entity + " where " + whereClause + " and " + extIdField
@@ -1034,7 +1040,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         return records[0].getField(extIdField);
     }
     
-    protected BasicDynaClass setupDynaClass(String entity) throws ConnectionException {
+    protected BasicDynaClass setupDynaClass(String entity, Collection<String> sfFields) throws ConnectionException {
         getController().getConfig().setValue(Config.ENTITY, entity);
         PartnerClient client = getController().getPartnerClient();
         if (!client.isLoggedIn()) {
@@ -1042,7 +1048,7 @@ public abstract class ProcessTestBase extends ConfigTestBase {
         }
 
         getController().setFieldTypes();
-        getController().setReferenceDescribes();
+        getController().setReferenceDescribes(sfFields);
         DynaProperty[] dynaProps = SforceDynaBean.createDynaProps(getController().getPartnerClient().getFieldTypes(), getController());
         BasicDynaClass dynaClass = SforceDynaBean.getDynaBeanInstance(dynaProps);
         SforceDynaBean.registerConverters(getController().getConfig());

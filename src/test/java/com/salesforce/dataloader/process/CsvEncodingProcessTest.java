@@ -111,7 +111,7 @@ public class CsvEncodingProcessTest extends ProcessTestBase {
         argMap.put(Config.ENTITY, "Account");
         argMap.put(Config.EXTRACT_SOQL, soql);
         argMap.put(Config.ENABLE_EXTRACT_STATUS_OUTPUT, Config.TRUE);
-        argMap.put(Config.EXTRACT_REQUEST_SIZE, "2000");
+        argMap.put(Config.EXPORT_BATCH_SIZE, "2000");
         argMap.putAll(config);
         argMap.remove(Config.MAPPING_FILE);
         return argMap;
@@ -121,7 +121,7 @@ public class CsvEncodingProcessTest extends ProcessTestBase {
         FileInputStream fis = new FileInputStream(new File(testConfig.get(Config.DAO_NAME)));
         try {
             CSVReader rdr = new CSVReader(fis, StandardCharsets.UTF_8.name());
-            int nameidx = rdr.nextRecord().indexOf("NAME");
+            int nameidx = rdr.nextRecord().indexOf("Name");
             assertEquals(name, rdr.nextRecord().get(nameidx));
         } finally {
             IOUtils.closeQuietly(fis);

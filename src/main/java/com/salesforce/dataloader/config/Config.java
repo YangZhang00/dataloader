@@ -125,7 +125,9 @@ public class Config {
     /**
      * Default values for specific parameters
      */
-    public static final int DEFAULT_EXTRACT_REQUEST_SIZE = 500;
+    public static final int DEFAULT_EXPORT_BATCH_SIZE = 500;
+    public static final int MAX_EXPORT_BATCH_SIZE = 2000;
+    public static final int MIN_EXPORT_BATCH_SIZE = 200;
     public static final int DEFAULT_MIN_RETRY_SECS = 2;
     public static final int DEFAULT_MAX_RETRIES = 3;
     public static final int MAX_RETRIES_LIMIT = 10;
@@ -134,26 +136,24 @@ public class Config {
     public static final int DEFAULT_LOAD_BATCH_SIZE = 200;
     public static final int DEFAULT_DAO_WRITE_BATCH_SIZE = 500;
     public static final int DEFAULT_DAO_READ_BATCH_SIZE = 200;
-    public static final int MAX_LOAD_BATCH_SIZE = 200;
+    public static final int MAX_SOAP_API_IMPORT_BATCH_SIZE = 200;
     public static final int MAX_DAO_READ_BATCH_SIZE = 200;
     public static final int MAX_DAO_WRITE_BATCH_SIZE = 2000;
     
     // Bulk v1 and v2 limits specified at https://developer.salesforce.com/docs/atlas.en-us.salesforce_app_limits_cheatsheet.meta/salesforce_app_limits_cheatsheet/salesforce_app_limits_platform_bulkapi.htm
-    public static final int MAX_BULK_API_BATCH_BYTES = 10000000;
-    public static final int MAX_BULK_API_BATCH_SIZE = 10000;
-    public static final int MAX_BULKV2_API_JOB_BYTES = 150000000;
-    public static final int MAX_BULKV2_API_JOB_SIZE = 150000000;
-    public static final int DEFAULT_BULK_API_BATCH_SIZE = 2000;
+    public static final int MAX_BULK_API_IMPORT_BATCH_BYTES = 10000000;
+    public static final int MAX_BULK_API_IMPORT_BATCH_SIZE = 10000;
+    public static final int MAX_BULKV2_API_IMPORT_JOB_BYTES = 150000000;
+    public static final int MAX_BULKV2_API_IMPORT_JOB_SIZE = 150000000;
+    public static final int DEFAULT_BULK_API_IMPORT_BATCH_SIZE = 2000;
     
     public static final long DEFAULT_BULK_API_CHECK_STATUS_INTERVAL = 5000L;
-    public static final String DEFAULT_ENDPOINT_URL = "https://login.salesforce.com";
+    public static final String DEFAULT_ENDPOINT_URL_PROD = "https://login.salesforce.com";
+    public static final String DEFAULT_ENDPOINT_URL_SANDBOX = "https://test.salesforce.com";
     public static final String LIGHTNING_ENDPOINT_URL_PART_VAL = "lightning.force.com";
     public static final String MYSF_ENDPOINT_URL_PART_VAL = "mysalesforce.com";
-    public static final String OAUTH_PROD_ENVIRONMENT_VAL = "Production";
-    public static final String OAUTH_SB_ENVIRONMENT_VAL = "Sandbox";
-
-    public static final String OAUTH_PROD_SERVER_VAL = "https://login.salesforce.com/";
-    public static final String OAUTH_SB_SERVER_VAL = "https://test.salesforce.com/";
+    public static final String PROD_ENVIRONMENT_VAL = "Production";
+    public static final String SB_ENVIRONMENT_VAL = "Sandbox";
 
     public static final String OAUTH_PROD_REDIRECTURI_VAL = "https://login.salesforce.com/services/oauth2/success";
     public static final String OAUTH_SB_REDIRECTURI_VAL = "https://test.salesforce.com/services/oauth2/success";
@@ -183,8 +183,9 @@ public class Config {
     /**
      * The mapping from preference name to preference value (represented as strings).
      */
-    private Properties properties;
-    private Properties readOnlyProperties;
+    private Properties properties = new LinkedProperties();
+    private Properties readOnlyPropertiesFromPropertiesFile = new LinkedProperties();
+
     private Map<String, String> parameterOverridesMap;
 
     /**
@@ -226,7 +227,9 @@ public class Config {
     // salesforce client connectivity
     public static final String USERNAME = "sfdc.username"; //$NON-NLS-1$
     public static final String PASSWORD = "sfdc.password"; //$NON-NLS-1$
-    public static final String ENDPOINT = "sfdc.endpoint"; //$NON-NLS-1$
+    public static final String AUTH_ENDPOINT = "sfdc.endpoint"; //$NON-NLS-1$
+    public static final String AUTH_ENDPOINT_PROD = "sfdc.endpoint.production"; //$NON-NLS-1$
+    public static final String AUTH_ENDPOINT_SANDBOX = "sfdc.endpoint.sandbox"; //$NON-NLS-1$
     public static final String PROXY_HOST = "sfdc.proxyHost"; //$NON-NLS-1$
     public static final String PROXY_PORT = "sfdc.proxyPort"; //$NON-NLS-1$
     public static final String PROXY_USERNAME = "sfdc.proxyUsername"; //$NON-NLS-1$
@@ -249,6 +252,8 @@ public class Config {
     public static final String BULK_API_CHECK_STATUS_INTERVAL = "sfdc.bulkApiCheckStatusInterval";
     public static final String BULK_API_ZIP_CONTENT = "sfdc.bulkApiZipContent";
     public static final String BULKV2_API_ENABLED = "sfdc.useBulkV2Api";
+    public static final String UPDATE_WITH_EXTERNALID = "sfdc.updateWithExternalId";
+    public static final String DELETE_WITH_EXTERNALID = "sfdc.deleteWithExternalId";
 
     public static final String WIRE_OUTPUT = "sfdc.wireOutput";
     public static final String TIMEZONE = "sfdc.timezone";
@@ -263,8 +268,8 @@ public class Config {
     public static final String OAUTH_PARTIAL_BULK_CLIENTID = OAUTH_PARTIAL_BULK + "." + OAUTH_PARTIAL_CLIENTID;
     public static final String OAUTH_PARTIAL_PARTNER_CLIENTID = OAUTH_PARTIAL_PARTNER + "." + OAUTH_PARTIAL_CLIENTID;
 
-    public static final String OAUTH_ENVIRONMENTS = OAUTH_PREFIX + "environments";
-    public static final String OAUTH_ENVIRONMENT = OAUTH_PREFIX + "environment";
+    public static final String AUTH_ENVIRONMENTS = OAUTH_PREFIX + "environments";
+    public static final String SELECTED_AUTH_ENVIRONMENT = OAUTH_PREFIX + "environment";
     public static final String OAUTH_ACCESSTOKEN = OAUTH_PREFIX + "accesstoken";
     public static final String OAUTH_REFRESHTOKEN = OAUTH_PREFIX + "refreshtoken";
     public static final String OAUTH_SERVER = OAUTH_PREFIX + OAUTH_PARTIAL_SERVER;
@@ -272,16 +277,17 @@ public class Config {
     public static final String OAUTH_CLIENTID = OAUTH_PREFIX + OAUTH_PARTIAL_CLIENTID;
     public static final String OAUTH_REDIRECTURI = OAUTH_PREFIX + OAUTH_PARTIAL_REDIRECTURI;
     public static final String OAUTH_LOGIN_FROM_BROWSER = OAUTH_PREFIX + "loginfrombrowser";
+    public static final String OAUTH_REDIRECT_URI_SUFFIX = "services/oauth2/success";
     public static final String REUSE_CLIENT_CONNECTION = "sfdc.reuseClientConnection";
     public static final String RICH_TEXT_FIELD_REGEX = "sfdx.richtext.regex";
     
     // salesforce operation parameters
     public static final String INSERT_NULLS = "sfdc.insertNulls"; //$NON-NLS-1$
     public static final String ENTITY = "sfdc.entity"; //$NON-NLS-1$
-    public static final String LOAD_BATCH_SIZE = "sfdc.loadBatchSize"; //$NON-NLS-1$
+    public static final String IMPORT_BATCH_SIZE = "sfdc.loadBatchSize"; //$NON-NLS-1$
     public static final String ASSIGNMENT_RULE = "sfdc.assignmentRule"; //$NON-NLS-1$
-    public static final String EXTERNAL_ID_FIELD = "sfdc.externalIdField"; //$NON-NLS-1$
-    public static final String EXTRACT_REQUEST_SIZE = "sfdc.extractionRequestSize"; //$NON-NLS-1$
+    public static final String IDLOOKUP_FIELD = "sfdc.externalIdField"; //$NON-NLS-1$
+    public static final String EXPORT_BATCH_SIZE = "sfdc.extractionRequestSize"; //$NON-NLS-1$
     public static final String EXTRACT_SOQL = "sfdc.extractionSOQL"; //$NON-NLS-1$
     public static final String SORT_EXTRACT_FIELDS = "sfdc.sortExtractionFields"; //$NON-NLS-1$
     public static final String LOAD_PRESERVE_WHITESPACE_IN_RICH_TEXT = "sfdc.load.preserveWhitespaceInRichText";
@@ -330,7 +336,7 @@ public class Config {
     public static final String READ_CHARSET = "dataAccess.readCharset";
     
     public static final String API_VERSION_PROP="salesforce.api.version";
-
+    public static final String OAUTH_INSTANCE_URL="salesforce.oauth.instanceURL";
     
     /**
      *  ===============  PILOT config properties ========
@@ -443,9 +449,7 @@ public class Config {
     private static final String[] READ_ONLY_PROPERTY_NAMES = {
             PASSWORD,
             PROXY_PASSWORD,
-            OAUTH_ACCESSTOKEN,
-            OAUTH_REFRESHTOKEN,
-            EXTERNAL_ID_FIELD,
+            IDLOOKUP_FIELD,
             MAPPING_FILE,
             EXTRACT_SOQL,
             OUTPUT_SUCCESS,
@@ -467,7 +471,22 @@ public class Config {
             RICH_TEXT_FIELD_REGEX,
             DAO_READ_PREPROCESSOR_SCRIPT,
             DAO_WRITE_POSTPROCESSOR_SCRIPT,
-            ENFORCE_WIZARD_WIDTH_HEIGHT_CONFIG
+            ENFORCE_WIZARD_WIDTH_HEIGHT_CONFIG,
+            DELETE_WITH_EXTERNALID,
+            OAUTH_ACCESSTOKEN,
+            OAUTH_REFRESHTOKEN,
+            OAUTH_INSTANCE_URL,
+            OAUTH_SERVER,
+            OAUTH_REDIRECTURI,
+            OAUTH_PREFIX + PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_SERVER,
+            OAUTH_PREFIX + SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_SERVER,
+            OAUTH_PREFIX + PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_REDIRECTURI,
+            OAUTH_PREFIX + SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_REDIRECTURI,
+            OAUTH_CLIENTID,
+            OAUTH_CLIENTSECRET,
+            OAUTH_PREFIX + PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_CLIENTSECRET,
+            OAUTH_PREFIX + SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_CLIENTSECRET,
+            RESET_URL_ON_LOGIN,
     };
     
     /**
@@ -503,7 +522,12 @@ public class Config {
         initializeLastRun(getLastRunPrefix());
         
         // Properties initialization completed. Configure OAuth environment next
-        setOAuthEnvironment(getString(OAUTH_ENVIRONMENT));
+        setOAuthEnvironment(getString(SELECTED_AUTH_ENVIRONMENT));
+        String endpoint_prod = getString(Config.AUTH_ENDPOINT_PROD);
+        if (Config.DEFAULT_ENDPOINT_URL_PROD.equalsIgnoreCase(endpoint_prod)) {
+            endpoint_prod = getString(Config.AUTH_ENDPOINT);
+            setValue(AUTH_ENDPOINT_PROD, endpoint_prod);
+        }
     }
     
     private String getLastRunPrefix() {
@@ -556,8 +580,11 @@ public class Config {
         setDefaultValue(CSV_DELIMITER_OTHER_VALUE, "-");
         setDefaultValue(CSV_DELIMITER_FOR_QUERY_RESULTS, AppUtil.COMMA);
 
-        setDefaultValue(ENDPOINT, DEFAULT_ENDPOINT_URL);
-        setDefaultValue(LOAD_BATCH_SIZE, useBulkApiByDefault() ? DEFAULT_BULK_API_BATCH_SIZE : DEFAULT_LOAD_BATCH_SIZE);
+        setDefaultValue(AUTH_ENDPOINT, DEFAULT_ENDPOINT_URL_PROD);
+        setDefaultValue(AUTH_ENDPOINT_PROD, getString(AUTH_ENDPOINT));
+        setDefaultValue(AUTH_ENDPOINT_SANDBOX, DEFAULT_ENDPOINT_URL_SANDBOX);
+
+        setDefaultValue(IMPORT_BATCH_SIZE, useBulkApiByDefault() ? DEFAULT_BULK_API_IMPORT_BATCH_SIZE : DEFAULT_LOAD_BATCH_SIZE);
         setDefaultValue(LOAD_ROW_TO_START_AT, 0);
         setDefaultValue(TIMEOUT_SECS, DEFAULT_TIMEOUT_SECS);
         setDefaultValue(CONNECTION_TIMEOUT_SECS, DEFAULT_CONNECTION_TIMEOUT_SECS);
@@ -569,7 +596,7 @@ public class Config {
         setDefaultValue(ENABLE_EXTRACT_STATUS_OUTPUT, false);
         setDefaultValue(ENABLE_LAST_RUN_OUTPUT, true);
         setDefaultValue(RESET_URL_ON_LOGIN, true);
-        setDefaultValue(EXTRACT_REQUEST_SIZE, DEFAULT_EXTRACT_REQUEST_SIZE);
+        setDefaultValue(EXPORT_BATCH_SIZE, DEFAULT_EXPORT_BATCH_SIZE);
         setDefaultValue(SORT_EXTRACT_FIELDS, true);
         setDefaultValue(DAO_WRITE_BATCH_SIZE, DEFAULT_DAO_WRITE_BATCH_SIZE);
         setDefaultValue(DAO_READ_BATCH_SIZE, DEFAULT_DAO_READ_BATCH_SIZE);
@@ -589,24 +616,18 @@ public class Config {
         setDefaultValue(SFDC_INTERNAL_SESSION_ID, (String) null);
 
         //oauth settings
-        setDefaultValue(OAUTH_SERVER, DEFAULT_ENDPOINT_URL);
-        setDefaultValue(OAUTH_REDIRECTURI, DEFAULT_ENDPOINT_URL);
-        setDefaultValue(OAUTH_ENVIRONMENT, OAUTH_PROD_ENVIRONMENT_VAL);
-        setDefaultValue(OAUTH_ENVIRONMENTS, OAUTH_PROD_ENVIRONMENT_VAL + AppUtil.COMMA + OAUTH_SB_ENVIRONMENT_VAL);
+        setDefaultValue(OAUTH_SERVER, DEFAULT_ENDPOINT_URL_PROD);
+        setDefaultValue(OAUTH_REDIRECTURI, DEFAULT_ENDPOINT_URL_PROD);
+        setDefaultValue(SELECTED_AUTH_ENVIRONMENT, PROD_ENVIRONMENT_VAL);
+        setDefaultValue(AUTH_ENVIRONMENTS, PROD_ENVIRONMENT_VAL + AppUtil.COMMA + SB_ENVIRONMENT_VAL);
 
         /* sfdc.oauth.<env>.<bulk | partner>.clientid = DataLoaderBulkUI | DataLoaderPartnerUI */
-        setDefaultValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_BULK_CLIENTID, OAUTH_BULK_CLIENTID_VAL);
-        setDefaultValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_PARTNER_CLIENTID, OAUTH_PARTNER_CLIENTID_VAL);
+        setDefaultValue(OAUTH_PREFIX + PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_BULK_CLIENTID, OAUTH_BULK_CLIENTID_VAL);
+        setDefaultValue(OAUTH_PREFIX + PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_PARTNER_CLIENTID, OAUTH_PARTNER_CLIENTID_VAL);
 
-        setDefaultValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_BULK_CLIENTID, OAUTH_BULK_CLIENTID_VAL);
-        setDefaultValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_PARTNER_CLIENTID, OAUTH_PARTNER_CLIENTID_VAL);
+        setDefaultValue(OAUTH_PREFIX + SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_BULK_CLIENTID, OAUTH_BULK_CLIENTID_VAL);
+        setDefaultValue(OAUTH_PREFIX + SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_PARTNER_CLIENTID, OAUTH_PARTNER_CLIENTID_VAL);
 
-        /* production server and redirecturi, sandbox server and redirecturi */
-        setDefaultValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_SERVER, OAUTH_PROD_SERVER_VAL);
-        setDefaultValue(OAUTH_PREFIX + OAUTH_PROD_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_REDIRECTURI, OAUTH_PROD_REDIRECTURI_VAL);
-
-        setDefaultValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_SERVER, OAUTH_SB_SERVER_VAL);
-        setDefaultValue(OAUTH_PREFIX + OAUTH_SB_ENVIRONMENT_VAL + "." + OAUTH_PARTIAL_REDIRECTURI, OAUTH_SB_REDIRECTURI_VAL);
         setDefaultValue(REUSE_CLIENT_CONNECTION, true);
         /*
         setDefaultValue(ENABLE_BULK_QUERY_PK_CHUNKING, false);
@@ -618,6 +639,8 @@ public class Config {
         setDefaultValue(DUPLICATE_RULE_RUN_AS_CURRENT_USER, false);
         setDefaultValue(BUFFER_UNPROCESSED_BULK_QUERY_RESULTS, false);
         setDefaultValue(BULKV2_API_ENABLED, false);
+        setDefaultValue(UPDATE_WITH_EXTERNALID, false);
+        setDefaultValue(DELETE_WITH_EXTERNALID, false);
         setDefaultValue(OAUTH_LOGIN_FROM_BROWSER, true);
         setDefaultValue(LOAD_PRESERVE_WHITESPACE_IN_RICH_TEXT, true);
         setDefaultValue(Config.CLI_OPTION_RUN_MODE, Config.RUN_MODE_UI_VAL);
@@ -637,6 +660,7 @@ public class Config {
         setDefaultValue(CACHE_DESCRIBE_GLOBAL_RESULTS, true);
         setDefaultValue(PROCESS_EXIT_WITH_ERROR_ON_FAILED_ROWS_BATCH_MODE, false);
         setDefaultValue(INCLUDE_RICH_TEXT_FIELD_DATA_IN_QUERY_RESULTS, false);
+        setDefaultValue(OAUTH_INSTANCE_URL, false);
     }
 
     /**
@@ -938,7 +962,17 @@ public class Config {
      */
     private void load(InputStream in) throws ConfigInitializationException, IOException {
         try {
-            properties.load(in);
+            Properties propsFromFile = new LinkedProperties();
+            propsFromFile.load(in);
+            properties.putAll(propsFromFile);
+            for (String roprop : READ_ONLY_PROPERTY_NAMES) {
+                if (propsFromFile.containsKey(roprop)) {
+                    this.readOnlyPropertiesFromPropertiesFile.put(
+                                roprop,
+                                propsFromFile.get(roprop));
+                }
+                    
+            }
         } catch (IOException e) {
             logger.fatal(Messages.getFormattedString("Config.errorPropertiesLoad", e.getMessage()));
             throw e;
@@ -948,26 +982,6 @@ public class Config {
 
         dirty = false;
     }
-    
-    private void restoreReadOnlyProperty(String propertyName) {
-        String preservedPropertyValue = (String)this.readOnlyProperties.get(propertyName);
-        if (preservedPropertyValue == null) {
-            this.properties.remove(propertyName);
-            return;
-        }
-        this.properties.put(propertyName, preservedPropertyValue);
-    }
-    
-    private void preserveReadOnlyProperty(Map<?, ?> propMap, String propertyName) {
-        if (this.readOnlyProperties == null) {
-            this.readOnlyProperties = new Properties();
-        }
-        String propertyValueToPreserve = (String) propMap.get(propertyName);
-        if (propertyValueToPreserve == null) {
-            return;
-        }
-        this.readOnlyProperties.put(propertyName, propertyValueToPreserve);
-    }
 
     /**
      * Post process parameters. Right now, only decrypts encrypted values in the map
@@ -976,12 +990,6 @@ public class Config {
      */
     @SuppressWarnings("unchecked")
     private void postLoad(Map<?, ?> propMap, boolean isConfigFilePropsMap) throws ConfigInitializationException {
-
-        if (isConfigFilePropsMap) {
-            for (String propertyName : READ_ONLY_PROPERTY_NAMES) {
-                preserveReadOnlyProperty(propMap, propertyName);
-            }
-        }
         // initialize encryption
         initEncryption((Map<String, String>) propMap);
 
@@ -1151,7 +1159,7 @@ public class Config {
             throw new IOException(Messages.getString("Config.fileMissing")); //$NON-NLS-1$
         }
 
-        Properties inMemoryProperties = new Properties();
+        Properties inMemoryProperties = new LinkedProperties();
         inMemoryProperties.putAll(this.properties);
         
         // do not save properties set through parameter overrides
@@ -1160,9 +1168,13 @@ public class Config {
                 this.properties.remove(propertyName);
             }
         }
-        // keep the property values for the read-only properties as retrieved from config.properties
-        for (String propertyName : READ_ONLY_PROPERTY_NAMES) {
-            this.restoreReadOnlyProperty(propertyName);
+        
+        // do not save read-only properties that were not specified
+        // in properties file
+        for (String roprop : READ_ONLY_PROPERTY_NAMES) {
+            if (!this.readOnlyPropertiesFromPropertiesFile.containsKey(roprop)) {
+                this.properties.remove(roprop);
+            }
         }
         
         removeUnsupportedProperties();
@@ -1182,6 +1194,55 @@ public class Config {
         }
         // save last run statistics
         lastRun.save();
+    }
+    
+    public void setAuthEndpoint(String authEndpoint) {
+        this.setAuthEndpointForEnv(authEndpoint, getString(Config.SELECTED_AUTH_ENVIRONMENT));
+    }
+    
+    public void setAuthEndpointForEnv(String authEndpoint, String env) {
+        AppUtil.validateAuthenticationHostDomainUrlAndThrow(authEndpoint);
+        if (env != null && env.equalsIgnoreCase(getString(Config.SB_ENVIRONMENT_VAL))) {
+            this.setValue(Config.AUTH_ENDPOINT_SANDBOX, authEndpoint);
+        } else {
+            this.setValue(Config.AUTH_ENDPOINT_PROD, authEndpoint);
+        }
+    }
+    
+    public String getAuthEndpoint() {
+        String endpoint = null;
+        if (Config.SB_ENVIRONMENT_VAL.equals(this.getString(Config.SELECTED_AUTH_ENVIRONMENT))) {
+            endpoint = getString(Config.AUTH_ENDPOINT_SANDBOX);
+            if (endpoint == null || endpoint.isBlank()) {
+                endpoint = getDefaultAuthEndpoint();
+            }
+        } else {
+            endpoint = getString(Config.AUTH_ENDPOINT_PROD);
+            if (endpoint == null || endpoint.isBlank()) {
+                endpoint = getDefaultAuthEndpoint();
+            }
+        }
+        AppUtil.validateAuthenticationHostDomainUrlAndThrow(endpoint);
+        return endpoint;
+    }
+    
+    public String getDefaultAuthEndpoint() {
+        if (Config.SB_ENVIRONMENT_VAL.equals(this.getString(Config.SELECTED_AUTH_ENVIRONMENT))) {
+            return Config.DEFAULT_ENDPOINT_URL_SANDBOX;
+        } else { // assume production is the only alternate environment
+            return Config.DEFAULT_ENDPOINT_URL_PROD;
+        }
+    }
+    
+    public boolean isDefaultAuthEndpoint(String endpoint) {
+        if (endpoint == null || endpoint.isBlank()) {
+            return false;
+        }
+        if (Config.SB_ENVIRONMENT_VAL.equals(this.getString(Config.SELECTED_AUTH_ENVIRONMENT))) {
+            return Config.DEFAULT_ENDPOINT_URL_SANDBOX.equalsIgnoreCase(endpoint);
+        } else { // assume production is the only alternate environment
+            return Config.DEFAULT_ENDPOINT_URL_PROD.equalsIgnoreCase(endpoint);
+        }
     }
 
     private void removeUnsupportedProperties() {
@@ -1355,42 +1416,53 @@ public class Config {
         return (Config.RUN_MODE_BATCH_VAL.equalsIgnoreCase(getString(Config.CLI_OPTION_RUN_MODE)));
     }
 
-    public int getLoadBatchSize() {
+    public int getImportBatchSize() {
         boolean bulkApi = isBulkAPIEnabled();
         boolean bulkV2Api = this.isBulkV2APIEnabled();
         
-        if (bulkApi && bulkV2Api) {
-            return MAX_BULKV2_API_JOB_SIZE;
+        if (bulkV2Api) {
+            return MAX_BULKV2_API_IMPORT_JOB_SIZE;
         }
         
         int bs = -1;
         try {
-            bs = getInt(LOAD_BATCH_SIZE);
+            bs = getInt(IMPORT_BATCH_SIZE);
         } catch (ParameterLoadException e) {
         }
-        int maxBatchSize = bulkApi ? MAX_BULK_API_BATCH_SIZE : MAX_LOAD_BATCH_SIZE;
-        return bs > maxBatchSize ? maxBatchSize : bs > 0 ? bs : getDefaultBatchSize(bulkApi, bulkV2Api);
+        int maxBatchSize = bulkApi ? MAX_BULK_API_IMPORT_BATCH_SIZE : MAX_SOAP_API_IMPORT_BATCH_SIZE;
+        return bs > maxBatchSize ? maxBatchSize : bs > 0 ? bs : getDefaultImportBatchSize(bulkApi, bulkV2Api);
     }
 
-    public int getDefaultBatchSize(boolean bulkApi, boolean bulkV2Api) {
-        if (bulkApi && bulkV2Api) {
-            return MAX_BULKV2_API_JOB_SIZE;
+    public int getDefaultImportBatchSize(boolean bulkApi, boolean bulkV2Api) {
+        if (bulkV2Api) {
+            return MAX_BULKV2_API_IMPORT_JOB_SIZE;
         }
-        return bulkApi ? DEFAULT_BULK_API_BATCH_SIZE : DEFAULT_LOAD_BATCH_SIZE;
+        return bulkApi ? DEFAULT_BULK_API_IMPORT_BATCH_SIZE : DEFAULT_LOAD_BATCH_SIZE;
     }
-
+    
+    public int getMaxImportBatchSize(boolean bulkApi, boolean bulkV2Api) {
+        if (bulkV2Api) {
+            return MAX_BULKV2_API_IMPORT_JOB_SIZE;
+        }
+        return bulkApi ? MAX_BULK_API_IMPORT_BATCH_SIZE : MAX_SOAP_API_IMPORT_BATCH_SIZE;
+    }
+    
     public boolean useBulkAPIForCurrentOperation() {
-        return isBulkAPIEnabled() && isBulkApiOperation();
+        return (isBulkAPIEnabled() || isBulkV2APIEnabled()) && isBulkApiOperation();
     }
 
     public boolean isBulkAPIEnabled() {
-        return getBoolean(BULK_API_ENABLED);
+        return getBoolean(BULK_API_ENABLED) && !isBulkV2APIEnabled();
     }
     
     public boolean isBulkV2APIEnabled() {
-        return isBulkAPIEnabled() && getBoolean(BULKV2_API_ENABLED);
+        return getBoolean(BULKV2_API_ENABLED);
     }
-
+    
+    public boolean isRESTAPIEnabled() {
+        return getBoolean(UPDATE_WITH_EXTERNALID);
+    }
+    
     private boolean isBulkApiOperation() {
         return getOperationInfo().bulkAPIEnabled();
     }
@@ -1469,11 +1541,10 @@ public class Config {
     }
 
     public void setOAuthEnvironment(String environment) {
-        String clientId;
         if (environment == null || environment.isBlank()) {
-            environment = OAUTH_PROD_ENVIRONMENT_VAL;
+            environment = PROD_ENVIRONMENT_VAL;
         }
-        String[] envArray = getString(OAUTH_ENVIRONMENTS).split(",");
+        String[] envArray = getString(AUTH_ENVIRONMENTS).split(",");
         boolean isEnvMatch = false;
         for (String env : envArray) {
             env = env.strip();
@@ -1482,9 +1553,12 @@ public class Config {
             }
         }
         if (!isEnvMatch) {
-            environment = OAUTH_PROD_ENVIRONMENT_VAL;
+            environment = PROD_ENVIRONMENT_VAL;
         }
-        if (getBoolean(BULK_API_ENABLED)) {
+        setValue(SELECTED_AUTH_ENVIRONMENT, environment);
+
+        String clientId;
+        if (getBoolean(BULK_API_ENABLED) || getBoolean(BULKV2_API_ENABLED)) {
             clientId = getOAuthEnvironmentString(environment, OAUTH_PARTIAL_BULK_CLIENTID);
         } else {
             clientId = getOAuthEnvironmentString(environment, OAUTH_PARTIAL_PARTNER_CLIENTID);
@@ -1492,11 +1566,32 @@ public class Config {
         if (clientId == null || clientId.isEmpty()) {
             clientId = getOAuthEnvironmentString(environment, OAUTH_PARTIAL_CLIENTID);
         }
-        setValue(OAUTH_ENVIRONMENT, environment);
-        setValue(OAUTH_SERVER, getOAuthEnvironmentString(environment, OAUTH_PARTIAL_SERVER));
         setValue(OAUTH_CLIENTID, clientId);
         setValue(OAUTH_CLIENTSECRET, getOAuthEnvironmentString(environment, OAUTH_PARTIAL_CLIENTSECRET));
-        setValue(OAUTH_REDIRECTURI, getOAuthEnvironmentString(environment, OAUTH_PARTIAL_REDIRECTURI));
+
+        // All URLs are driven from Config.ENDPOINT URL setting
+        String endpointURL = getAuthEndpoint();
+        if (!endpointURL.endsWith("/")) {
+            endpointURL += "/";
+        }
+        String envSpecificOAuthServerURL = getOAuthEnvironmentString(environment, OAUTH_PARTIAL_SERVER);
+        if (envSpecificOAuthServerURL != null
+                && !envSpecificOAuthServerURL.contains(Config.DEFAULT_ENDPOINT_URL_SANDBOX)
+                && !envSpecificOAuthServerURL.contains(Config.DEFAULT_ENDPOINT_URL_PROD)) {
+            endpointURL = envSpecificOAuthServerURL;
+        }
+        setValue(OAUTH_SERVER, endpointURL);
+        
+        String envSpecificOAuthRedirectURI = getOAuthEnvironmentString(environment, OAUTH_PARTIAL_REDIRECTURI);
+        String redirectURI = "";
+        if (envSpecificOAuthRedirectURI != null
+                && !envSpecificOAuthServerURL.contains(Config.DEFAULT_ENDPOINT_URL_SANDBOX)
+                && !envSpecificOAuthServerURL.contains(Config.DEFAULT_ENDPOINT_URL_PROD)) {
+            redirectURI = envSpecificOAuthRedirectURI;
+        } else {
+            redirectURI = endpointURL + Config.OAUTH_REDIRECT_URI_SUFFIX;
+        }
+        setValue(OAUTH_REDIRECTURI, redirectURI);
     }
     
     /**
@@ -1602,5 +1697,4 @@ public class Config {
     public static interface ConfigListener {
         void configValueChanged(String key, String oldValue, String newValue);
     }
-
 }

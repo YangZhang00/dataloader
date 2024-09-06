@@ -76,13 +76,12 @@ public class CSVFileWriter implements DataWriter {
     /**
      * If <code>capitalizedHeadings</code> is true, output header row in caps
      */
-    private final boolean capitalizedHeadings;
+    private final boolean capitalizedHeadings = false;
     private final char columnDelimiter;
         
     public CSVFileWriter(String fileName, Config config, String columnDelimiterStr) {
 
         this.fileName = fileName;
-        this.capitalizedHeadings = true;
         encoding = config.getCsvEncoding(true);
         logger.debug(this.getClass().getName(), "encoding used to write to CSV file is " + encoding);
         if (columnDelimiterStr.length() == 0) {
@@ -232,6 +231,12 @@ public class CSVFileWriter implements DataWriter {
     static private void visitColumns(List<String> columnNames, Row row, CSVColumnVisitor visitor) throws IOException {
         for (String colName : columnNames) {
             Object colVal = row.get(colName);
+            if (colVal == null && colName.contains("(")) {
+                int lparenIdx = colName.indexOf('(');
+                int rparenIdx = colName.indexOf(')');
+                colName = colName.substring(lparenIdx + 1, rparenIdx);
+                colVal = row.get(colName);
+            }
             visitor.visit(colVal != null ? colVal.toString() : "");
         }
     }

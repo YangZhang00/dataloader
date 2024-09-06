@@ -50,6 +50,8 @@ import org.apache.http.client.methods.HttpHead;
 import org.apache.http.client.methods.HttpPatch;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpPut;
+import org.apache.http.client.methods.HttpRequestBase;
+import org.apache.http.client.methods.HttpDelete;
 import org.apache.http.client.protocol.HttpClientContext;
 import org.apache.http.entity.BufferedHttpEntity;
 import org.apache.http.entity.ByteArrayEntity;
@@ -81,7 +83,7 @@ public class HttpClientTransport implements HttpTransportInterface {
 
     private static ConnectorConfig currentConfig = null;
     private boolean successful;
-    private HttpEntityEnclosingRequestBase httpMethod;
+    private HttpRequestBase httpMethod;
     private OutputStream output;
     private ByteArrayOutputStream entityByteOut;
     private static CloseableHttpClient currentHttpClient = null;
@@ -214,13 +216,14 @@ public class HttpClientTransport implements HttpTransportInterface {
     public synchronized InputStream getContent() throws IOException {
         serverInvocationCount++;
         initializeHttpClient();
-    	if (this.httpMethod.getEntity() == null) {
+        if (this.httpMethod instanceof HttpEntityEnclosingRequestBase
+            && ((HttpEntityEnclosingRequestBase)this.httpMethod).getEntity() == null) {
 	        byte[] entityBytes = entityByteOut.toByteArray();
 	        HttpEntity entity = new ByteArrayEntity(entityBytes);
 	    	currentConfig.setUseChunkedPost(false);
-	    	this.httpMethod.setEntity(entity);
+	    	((HttpEntityEnclosingRequestBase)this.httpMethod).setEntity(entity);
     	}
-        InputStream input;
+        InputStream input = new ByteArrayInputStream(new byte[1]);
         try {
             HttpClientContext context = HttpClientContext.create();
             RequestConfig config = RequestConfig.custom().setExpectContinueEnabled(currentConfig.useChunkedPost()).build();
@@ -242,12 +245,14 @@ public class HttpClientTransport implements HttpTransportInterface {
                 }
                 // copy input stream data into a new input stream because releasing the connection will close the input stream
                 ByteArrayOutputStream bOut = new ByteArrayOutputStream();
+                if (response.getEntity() != null) {
                 try (InputStream inStream = response.getEntity().getContent()) {
                     IOUtils.copy(inStream, bOut);
                     input = new ByteArrayInputStream(bOut.toByteArray());
                     if (response.containsHeader("Content-Encoding") && response.getHeaders("Content-Encoding")[0].getValue().equals("gzip")) {
                         input = new GZIPInputStream(input);
                     }
+                }
                 }
             }
         } finally {
@@ -302,6 +307,9 @@ public class HttpClientTransport implements HttpTransportInterface {
     		case PUT :
     			this.httpMethod = new HttpPut(endpoint);
     			break;
+    		case DELETE :
+    		    this.httpMethod = new HttpDelete(endpoint);
+    		    break;
     		default:
     			this.httpMethod = new HttpPost(endpoint);
     	}
@@ -318,7 +326,9 @@ public class HttpClientTransport implements HttpTransportInterface {
         	}
         	BufferedHttpEntity entity = new BufferedHttpEntity(new InputStreamEntity(requestInputStream, contentType));
         	currentConfig.setUseChunkedPost(true);
-        	this.httpMethod.setEntity(entity);
+            if (this.httpMethod instanceof HttpEntityEnclosingRequestBase) {
+                ((HttpEntityEnclosingRequestBase)this.httpMethod).setEntity(entity);
+            }
         	return null;
         }
 

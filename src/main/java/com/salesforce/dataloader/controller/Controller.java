@@ -31,9 +31,9 @@ import com.salesforce.dataloader.action.progress.ILoaderProgress;
 import com.salesforce.dataloader.client.BulkV1Client;
 import com.salesforce.dataloader.client.BulkV2Client;
 import com.salesforce.dataloader.client.ClientBase;
-import com.salesforce.dataloader.client.DescribeRefObject;
 import com.salesforce.dataloader.client.HttpClientTransport;
 import com.salesforce.dataloader.client.PartnerClient;
+import com.salesforce.dataloader.client.CompositeRESTClient;
 import com.salesforce.dataloader.client.ReferenceEntitiesDescribeMap;
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.config.Messages;
@@ -69,6 +69,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.text.SimpleDateFormat;
+import java.util.Collection;
 import java.util.Date;
 import java.util.Map;
 import java.util.Properties;
@@ -102,6 +103,7 @@ public class Controller {
     private BulkV1Client bulkV1Client;
     private BulkV2Client bulkV2Client;
     private PartnerClient partnerClient;
+    private CompositeRESTClient restClient;
     private LoaderWindow loaderWindow;
     private boolean lastOperationSuccessful = true;
 
@@ -134,7 +136,7 @@ public class Controller {
         }
         HttpClientTransport.setReuseConnection(config.getBoolean(Config.REUSE_CLIENT_CONNECTION));
     }
-
+    
     public synchronized void executeAction(ILoaderProgress monitor) throws DataAccessObjectException, OperationException {
         OperationInfo operation = this.config.getOperationInfo();
         IAction action = operation.instantiateAction(this, monitor);
@@ -153,7 +155,15 @@ public class Controller {
         if (this.partnerClient == null) {
             return null;
         }
-        String apiInfoStr = Labels.getFormattedString("Operation.apiVersion", PartnerClient.getAPIVersion());
+        String apiTypeStr = "SOAP API";
+        if (config.isBulkAPIEnabled()) {
+            apiTypeStr = "Bulk API";
+        }
+        if (config.isBulkV2APIEnabled()) {
+            apiTypeStr = "Bulk API 2.0";
+        }
+        String[] args =  {apiTypeStr, PartnerClient.getAPIVersionForTheSession()};
+        String apiInfoStr = Labels.getFormattedString("Operation.apiVersion", args);
         LimitInfo apiLimitInfo = this.partnerClient.getAPILimitInfo();
         if (apiLimitInfo != null) {
             apiInfoStr = Labels.getFormattedString("Operation.currentAPIUsage", apiLimitInfo.getCurrent())
@@ -178,14 +188,29 @@ public class Controller {
         validateSession();
         getPartnerClient().setFieldReferenceDescribes();
     }
+    
+    public void setReferenceDescribes(Collection<String> sfFields) throws ConnectionException {
+        validateSession();
+        getPartnerClient().setFieldReferenceDescribes(sfFields);
+    }
 
-    private boolean loginIfSessionExists(ClientBase<?> clientToLogin) {
+    private boolean connectIfSessionExists(ClientBase<?> clientToLogin) {
         if (!isLoggedIn()) return false;
         return clientToLogin.connect(getPartnerClient().getSession());
     }
     
     public static String getAPIVersion() {
-        return ClientBase.getAPIVersion();
+        return ClientBase.getAPIVersionForTheSession();
+    }
+    
+    public static int getAPIMajorVersion() {
+        String apiFullVersion = Controller.getAPIVersion();
+        int apiMajorVersion = 0;
+        if (apiFullVersion != null) {
+            String[] apiVersionParts = apiFullVersion.split("\\.");
+            apiMajorVersion = Integer.parseInt(apiVersionParts[0]);
+        }
+        return apiMajorVersion;
     }
 
     public Map<String, DescribeGlobalSObjectResult> getEntityDescribes() {
@@ -238,12 +263,16 @@ public class Controller {
             throw new MappingInitializationException(e.getMessage());
         }
         config.setValue(Config.ENTITY, sObjectName);
+        initializeMapping(); // initialize mapping before setting reference describes
         try {
             this.setFieldTypes();
             this.setReferenceDescribes();
         } catch (Exception e) {
             throw new MappingInitializationException(e);
         }
+    }
+    
+    private void initializeMapping() throws MappingInitializationException {
         String mappingFile = config.getString(Config.MAPPING_FILE);
         if (mappingFile != null 
                 && !mappingFile.isBlank() && !Files.exists(Path.of(mappingFile))) {
@@ -256,6 +285,7 @@ public class Controller {
         this.mapper = getConfig().getOperationInfo().isExtraction() ? 
                 new SOQLMapper(getPartnerClient(), dao.getColumnNames(), getFieldTypes().getFields(), mappingFile) 
               : new LoadMapper(getPartnerClient(), dao.getColumnNames(), getFieldTypes().getFields(), mappingFile);
+
     }
 
     public void createAndShowGUI() throws ControllerInitializationException {
@@ -294,6 +324,10 @@ public class Controller {
             this.loaderWindow.updateTitle(null);
         }
     }
+    
+    public LoaderWindow getLoaderWindow() {
+        return this.loaderWindow;
+    }
 
     public static synchronized Controller getInstance(Map<String, String> argsMap) throws ControllerInitializationException, ParameterLoadException, ConfigInitializationException {
         logger = LogManager.getLogger(Controller.class);
@@ -326,6 +360,8 @@ public class Controller {
             } else {
                 return getBulkV1Client();
             }
+        } else if (this.config.isRESTAPIEnabled()) {
+            return getRESTClient();
         }
         return getPartnerClient();
     }
@@ -333,7 +369,7 @@ public class Controller {
     public BulkV1Client getBulkV1Client() {
         if (this.bulkV1Client == null) {
             this.bulkV1Client = new BulkV1Client(this);
-            loginIfSessionExists(this.bulkV1Client);
+            connectIfSessionExists(this.bulkV1Client);
         }
         return this.bulkV1Client;
     }
@@ -341,12 +377,18 @@ public class Controller {
     public BulkV2Client getBulkV2Client() {
         if (this.bulkV2Client == null) {
             this.bulkV2Client = new BulkV2Client(this);
-            loginIfSessionExists(this.bulkV2Client);
+            connectIfSessionExists(this.bulkV2Client);
         }
         return this.bulkV2Client;
     }
     
-    /**
+    public CompositeRESTClient getRESTClient() {
+        if (this.restClient == null) {
+            this.restClient = new CompositeRESTClient(this);
+            connectIfSessionExists(this.restClient);
+        }
+        return this.restClient;
+    }/**
      * @return Instance of configuration
      */
     public Config getConfig() {
@@ -456,6 +498,9 @@ public class Controller {
         if (this.partnerClient != null) this.partnerClient.logout();
         this.bulkV1Client = null;
         this.partnerClient = null;
+        this.bulkV2Client = null;
+        this.restClient = null;
+        config.setValue(Config.OAUTH_ACCESSTOKEN, "");
     }
 
     public boolean attachmentsEnabled() {

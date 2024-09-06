@@ -68,7 +68,7 @@ public abstract class ProcessExtractTestBase extends ProcessTestBase {
                 // Bulk API
                 , TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_V2_API_DISABLED)
                 // Bulk V2 Query API
-                , TestVariant.forSettings(TestSetting.BULK_API_ENABLED, TestSetting.BULK_V2_API_ENABLED)
+                , TestVariant.forSettings(TestSetting.BULK_V2_API_ENABLED)
                 );
     }
 
@@ -126,7 +126,7 @@ public abstract class ProcessExtractTestBase extends ProcessTestBase {
         argMap.put(Config.EXTRACT_SOQL, soql);
         argMap.put(Config.ENABLE_EXTRACT_STATUS_OUTPUT, Config.TRUE);
         argMap.put(Config.LIMIT_OUTPUT_TO_QUERY_FIELDS, Config.TRUE);
-        argMap.put(Config.EXTRACT_REQUEST_SIZE, "2000");
+        argMap.put(Config.EXPORT_BATCH_SIZE, "2000");
         if (!useMappingFile) {
             argMap.remove(Config.MAPPING_FILE);
         }
@@ -401,6 +401,30 @@ public abstract class ProcessExtractTestBase extends ProcessTestBase {
         // verify IDs and phone format 
         verifyIdsInCSV(control, accountIds, true);
         
+        // Verify that column positions match positions
+        // specified in the mapping (.sdl) file.
+        String fileName = control.getConfig().getString(Config.DAO_NAME);
+        final DataReader extractionReader = new CSVFileReader(new File(fileName), getController().getConfig(), true, false);
+        try {
+            extractionReader.open();
+            List<String> daoCols = extractionReader.getColumnNames();
+            String colAt = daoCols.get(4);
+            assertEquals("Incorrect DAO column sequence", colAt.toUpperCase(), "ACCOUNT_NAME");
+            colAt = daoCols.get(5);
+            assertEquals("Incorrect DAO column sequence", colAt.toUpperCase(), "ACCOUNT_ID");
+
+            // Verify that column positions not specified in the mapping
+            // file are in the same order as specified in SOQL.
+            colAt = daoCols.get(7);
+            if (isBulkAPIEnabled(this.getTestConfig()) || isBulkV2APIEnabled(this.getTestConfig())) {
+                assertEquals("Incorrect DAO column sequence", colAt.toUpperCase(), "WEBSITE");
+            } else {
+                assertEquals("Incorrect DAO column sequence", colAt.toUpperCase(), "TYPE");
+            }
+        } finally {
+            extractionReader.close();
+        } 
+        
         testConfig = getDoNotLimitOutputToQueryFieldsTestConfig(soql, "Account", true);
         control = runProcess(testConfig, numRecords);
         // verify IDs and phone format 
@@ -453,10 +477,5 @@ public abstract class ProcessExtractTestBase extends ProcessTestBase {
             getBinding().delete(ids);
         }
         return ids;
-    }
-
-    protected boolean isBulkV2APIEnabled(Map<String, String> argMap) {
-        // bulk v2 api is not used for query all
-        return !isExtractAll() && super.isBulkV2APIEnabled(argMap);
     }
 }

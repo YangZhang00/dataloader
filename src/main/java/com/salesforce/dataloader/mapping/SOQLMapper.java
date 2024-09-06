@@ -47,7 +47,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
@@ -113,7 +112,7 @@ public class SOQLMapper extends Mapper {
     }
     
     // overwrite parent's methods to use soqlMap instead of map
-    public String getMapping(String srcName, boolean strictMatching) {
+    public String getExtractionMapping(String srcName, boolean strictMatching) {
         if (extractionMap.containsKey(srcName)) {
             return extractionMap.get(srcName);
         }
@@ -135,7 +134,7 @@ public class SOQLMapper extends Mapper {
         while (fields.hasNext()) {
             XmlObject field = fields.next();
             final String fieldName = prefix + field.getName().getLocalPart();
-            String localName = getMapping(fieldName);
+            String localName = getExtractionMapping(fieldName, false);
             if (localName == null) {
                 localName = fieldName;
             }
@@ -180,7 +179,7 @@ public class SOQLMapper extends Mapper {
         for (String val : values) {
             String sfdcFieldName = headerIter.next();
             if ("Id".equalsIgnoreCase(sfdcFieldName)) id.append(val);
-            String daoColumnName = getMapping(sfdcFieldName);
+            String daoColumnName = getExtractionMapping(sfdcFieldName, false);
             if (daoColumnName == null) {
                 this.map.put(sfdcFieldName, sfdcFieldName);
                 daoColumnName = sfdcFieldName;
@@ -236,12 +235,12 @@ public class SOQLMapper extends Mapper {
 
     private void _mapDaoColumns() {
         if (hasDaoColumns()) {
-            List<Map.Entry<String, String>> soqlBasedMappingEntries = new LinkedList<Map.Entry<String, String>>(getMap().entrySet());
+            List<Map.Entry<String, String>> soqlBasedMappingEntries = new ArrayList<Map.Entry<String, String>>(getMap().entrySet());
 
-            clearMap();
+            clearMappings();
 
             // FIXME UGLY, NESTED LOOPS
-            List<String> daoColumns = new LinkedList<String>(getDaoColumns());
+            List<String> daoColumns = new ArrayList<String>(getDaoColumns());
             ListIterator<String> daoColumnIter = daoColumns.listIterator();
             while (daoColumnIter.hasNext()) {
                 String daoColName = daoColumnIter.next();
@@ -280,8 +279,10 @@ public class SOQLMapper extends Mapper {
         return this.extractionMap.values();
     }
     
-    public void clearMap() {
-        this.extractionMap.clear();
+    public void clearMappings() {
+        if (this.extractionMap != null) {
+            this.extractionMap.clear();
+        }
         this.isInitialized = false;
     }
     
@@ -296,7 +297,9 @@ public class SOQLMapper extends Mapper {
 
     
     private void initializeSoQLMap() {
-        this.extractionMap.clear();
+        if (this.extractionMap != null) {
+            this.extractionMap.clear();
+        }
         
         //add extraction mapping
         this.extractionMap.putAll(this.map);

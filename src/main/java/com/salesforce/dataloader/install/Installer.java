@@ -33,9 +33,11 @@ import java.io.InputStreamReader;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Map;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.logging.log4j.Level;
@@ -45,7 +47,7 @@ import org.apache.logging.log4j.Logger;
 import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.util.AppUtil;
 
-public class Installer extends Thread {
+public class Installer {
     private static final String USERHOME=System.getProperty("user.home");
     private static final String PATH_SEPARATOR = System.getProperty("file.separator");
     private static final String CREATE_DEKSTOP_SHORTCUT_ON_WINDOWS = ":createDesktopShortcut";
@@ -53,63 +55,99 @@ public class Installer extends Thread {
 
     private static Logger logger;
     private static String[] OS_SPECIFIC_DL_COMMAND = {"dataloader.bat", "dataloader_console", "dataloader.sh"};
-    
-    public void run() {
-        System.out.println(Messages.getMessage(Installer.class, "exitMessage"));
-    }
 
-    public static void install(String[] args) {
+    public static void install(Map<String, String> argsmap) {
+        int exitCode = AppUtil.EXIT_CODE_NO_ERRORS;
+        boolean interactiveMode = true;
+        boolean installedInPreviousRun = false;
+        boolean skipCopyArtifacts = false;
         try {
-            String installationDir = ".";
-            installationDir = new File(Installer.class.getProtectionDomain().getCodeSource().getLocation()
+            String installationFolder = ".";
+            installationFolder = new File(Installer.class.getProtectionDomain().getCodeSource().getLocation()
                     .toURI()).getParent();
-            Runtime.getRuntime().addShutdownHook(new Installer());
             setLogger();
 
             for (String dlCmd : OS_SPECIFIC_DL_COMMAND) {
-                Path installFilePath = Paths.get(installationDir + PATH_SEPARATOR + dlCmd);
+                Path installFilePath = Paths.get(installationFolder + PATH_SEPARATOR + dlCmd);
                 if (Files.exists(installFilePath) && AppUtil.getAppRunMode() != AppUtil.APP_RUN_MODE.INSTALL) {
                     // installation completed
+                    installedInPreviousRun = true;
                     return;
                 }
             }
             boolean hideBanner = false;
-            boolean skipCopyArtifacts = false;
-            boolean skipCreateDesktopShortcut = false;
-            boolean skipCreateStartMenuShortcut = false;
-            boolean skipCreateAppsDirShortcut = false;
             
             if (!hideBanner) {
                 logger.debug("going to show banner");
                 AppUtil.showBanner();
             }
-            
-            skipCopyArtifacts = promptCurrentInstallationFolder();
+            String installationFolderFromCommandLine = argsmap.get(AppUtil.CLI_OPTION_INSTALLATION_FOLDER_PROP);
+            boolean promptUserToDeleteExistingInstallationFolder = false;
+            if (installationFolderFromCommandLine == null || installationFolderFromCommandLine.isBlank()) {
+                skipCopyArtifacts = promptCurrentInstallationFolder();
+                promptUserToDeleteExistingInstallationFolder = true;
+                interactiveMode = true;
+            } else {
+                interactiveMode = false;
+                promptUserToDeleteExistingInstallationFolder = false;
+            }
             if (!skipCopyArtifacts) {
                 logger.debug("going to select installation folder");
-                installationDir = selectInstallationDir();
+                installationFolder = selectInstallationDir(installationFolderFromCommandLine);
                 logger.debug("going to copy artifacts");
-                copyArtifacts(installationDir);
+                copyArtifacts(installationFolder, promptUserToDeleteExistingInstallationFolder);
             }
-            extractInstallationArtifactsFromJar(installationDir);
-            if (!skipCreateDesktopShortcut) {
-                logger.debug("going to create desktop shortcut");
-                createDesktopShortcut(installationDir);
+            extractInstallationArtifactsFromJar(installationFolder);
+            
+            String createDesktopShortcutStr = argsmap.get(AppUtil.CLI_OPTION_INSTALLATION_CREATE_DESKTOP_SHORTCUT_PROP);
+            logger.debug("going to create desktop shortcut");
+            if (interactiveMode) {
+                createDesktopShortcut(installationFolder, true); 
+            } else if (createDesktopShortcutStr != null 
+                    && ("true".equalsIgnoreCase(createDesktopShortcutStr)
+                    || "yes".equalsIgnoreCase(createDesktopShortcutStr))) {
+                createDesktopShortcut(installationFolder, false); 
             }
-            if (!skipCreateStartMenuShortcut && AppUtil.isRunningOnWindows()) {
-                logger.debug("going to create start menu shortcut");
-                createStartMenuShortcut(installationDir);
+            
+            String createWindowsStartMenuShortcutStr = argsmap.get(AppUtil.CLI_OPTION_INSTALLATION_CREATE_WINDOWS_START_MENU_SHORTCUT_PROP);
+            logger.debug("going to create start menu shortcut");
+            if (AppUtil.isRunningOnWindows()) {
+                if (interactiveMode) {
+                    createStartMenuShortcut(installationFolder, true); 
+                } else if (createWindowsStartMenuShortcutStr != null
+                        && ("true".equalsIgnoreCase(createWindowsStartMenuShortcutStr)
+                            || "yes".equalsIgnoreCase(createWindowsStartMenuShortcutStr))) {
+                    createStartMenuShortcut(installationFolder, false); 
+                }
             }
-            if (!skipCreateAppsDirShortcut && AppUtil.isRunningOnMacOS()) {
-                logger.debug("going to create Applications folder shortcut");
-                createAppsDirShortcut(installationDir);
-            }
-            if (!skipCopyArtifacts) {
-                System.exit(AppUtil.EXIT_CODE_NO_ERRORS);
+
+            String createMacOSAppsFolderShortcutStr = argsmap.get(AppUtil.CLI_OPTION_INSTALLATION_CREATE_MACOS_APPS_FOLDER_SHORTCUT_PROP);
+            logger.debug("going to create start menu shortcut");
+            if (AppUtil.isRunningOnMacOS()) {
+                if (interactiveMode) {
+                    createAppsFolderShortcut(installationFolder, true); 
+                } else if (createMacOSAppsFolderShortcutStr != null
+                        && ("true".equalsIgnoreCase(createMacOSAppsFolderShortcutStr)
+                            || "yes".equalsIgnoreCase(createMacOSAppsFolderShortcutStr))) {
+                    createAppsFolderShortcut(installationFolder, false); 
+                }
             }
         } catch (Exception ex) {
             handleException(ex, Level.FATAL);
-            System.exit(AppUtil.EXIT_CODE_CLIENT_ERROR);
+            exitCode = AppUtil.EXIT_CODE_CLIENT_ERROR;
+        } finally {
+            if (installedInPreviousRun || skipCopyArtifacts) {
+                return;
+            }
+            if (interactiveMode) {
+                System.out.print(Messages.getMessage(Installer.class, "exitMessage"));
+                try {
+                    System.in.read();
+                } catch (IOException e) {
+                    // ignore
+                }
+            }
+            System.exit(exitCode);
         }
     }
     
@@ -118,34 +156,40 @@ public class Installer extends Thread {
         return loopingYesNoPrompt(Messages.getMessage(Installer.class, "promptCurrentInstallationFolder", currentExecutionFolder));
     }
         
-    private static String selectInstallationDir() throws IOException {
-        String installationDir = "";
-        System.out.println(Messages.getMessage(Installer.class, "initialMessage", USERHOME + PATH_SEPARATOR));
-        String installationDirRoot = promptAndGetUserInput(Messages.getMessage(Installer.class, "promptInstallationFolder"));
-        if (installationDirRoot.isBlank()) {
-            installationDirRoot = "dataloader";
+    private static String selectInstallationDir(String installationFolder) throws IOException {
+        if (installationFolder == null || installationFolder.isBlank()) {
+            installationFolder = "";
+            System.out.println(Messages.getMessage(Installer.class, "initialMessage", USERHOME + PATH_SEPARATOR));
+            String installationDirRoot = promptAndGetUserInput(Messages.getMessage(Installer.class, "promptInstallationFolder"));
+            if (installationDirRoot.isBlank()) {
+                installationDirRoot = "dataloader";
+            }
+            logger.debug("installation folder: " + installationDirRoot);
+            String installationPathSuffix = installationDirRoot + PATH_SEPARATOR + "v" + AppUtil.DATALOADER_VERSION;
+            if (installationDirRoot.startsWith(PATH_SEPARATOR) 
+                 || (AppUtil.isRunningOnWindows() && installationDirRoot.indexOf(':') == 1 && installationDirRoot.indexOf(PATH_SEPARATOR) == 2)) {
+                // Absolute path specified. 
+                // Absolute path on Mac and Linux start with PATH_SEPARATOR
+                // Absolute path on Windows starts with <Single character drive letter>:\. For example, "C:\"
+                installationFolder = installationPathSuffix;
+            } else {
+                installationFolder = USERHOME + PATH_SEPARATOR + installationPathSuffix;
+            }
         }
-        logger.debug("installation folder: " + installationDirRoot);
-        String installationPathSuffix = installationDirRoot + PATH_SEPARATOR + "v" + AppUtil.DATALOADER_VERSION;
-        if (installationDirRoot.startsWith(PATH_SEPARATOR) 
-             || (AppUtil.isRunningOnWindows() && installationDirRoot.indexOf(':') == 1 && installationDirRoot.indexOf(PATH_SEPARATOR) == 2)) {
-            // Absolute path specified. 
-            // Absolute path on Mac and Linux start with PATH_SEPARATOR
-            // Absolute path on Windows starts with <Single character drive letter>:\. For example, "C:\"
-            installationDir = installationPathSuffix;
-        } else {
-            installationDir = USERHOME + PATH_SEPARATOR + installationPathSuffix;
-        }
-        logger.debug("installation folder absolute path: " + installationDir);
-        System.out.println(Messages.getMessage(Installer.class, "installationDirConfirmation", AppUtil.DATALOADER_VERSION, installationDir));
-        return installationDir;
+        logger.debug("installation folder absolute path: " + installationFolder);
+        System.out.println(Messages.getMessage(Installer.class, "installationDirConfirmation", AppUtil.DATALOADER_VERSION, installationFolder));
+        return installationFolder;
     }
     
-    private static void copyArtifacts(String installationDir) throws Exception {
+    private static void copyArtifacts(String installationDir, boolean promptUserToDeleteExistingInstallationFolder) throws Exception {
         Path installationDirPath = Paths.get(installationDir);
         if (Files.exists(installationDirPath)) {
-            final String prompt = Messages.getMessage(Installer.class, "overwriteInstallationDirPrompt", AppUtil.DATALOADER_VERSION, installationDir);
-            if (loopingYesNoPrompt(prompt)) {
+            boolean deleteExistingFolder = true;
+            if (promptUserToDeleteExistingInstallationFolder) {
+                final String prompt = Messages.getMessage(Installer.class, "overwriteInstallationDirPrompt", AppUtil.DATALOADER_VERSION, installationDir);
+                deleteExistingFolder = loopingYesNoPrompt(prompt);
+            }
+            if (deleteExistingFolder) {
                 System.out.println(Messages.getMessage(Installer.class, "deletionInProgressMessage", AppUtil.DATALOADER_VERSION));
                 Messages.getMessage(Installer.class, "initialMessage");
                 logger.debug("going to delete " + installationDir);
@@ -161,15 +205,7 @@ public class Installer extends Thread {
         createDir(installationDir);
         logger.debug("going to copy contents of " + installationSourceDir + " to " + installationDir);
         
-        String classpath = System.getProperty("java.class.path");
-        String[] jars = classpath.split(System.getProperty("path.separator"));
-        String dataloaderJar = null;
-        for (String jar : jars) {
-            if (jar.contains("dataloader")) {
-                dataloaderJar = jar;
-                break;
-            }
-        }
+        String dataloaderJar = Installer.class.getProtectionDomain().getCodeSource().getLocation().getFile();
         if (dataloaderJar == null) {
             logger.fatal("Did not find Data Loader jar in the installation artifacts. Unable to install Data Loader");
             System.exit(AppUtil.EXIT_CODE_CLIENT_ERROR);
@@ -243,11 +279,15 @@ public class Installer extends Thread {
         for (;;) {
             System.out.println("");
             String input = "";
-            try {
-                input = promptAndGetUserInput(prompt);
-            } catch (IOException e) {
-                System.err.println(Messages.getMessage(Installer.class, "responseReadError"));
-                handleException(e, Level.ERROR);
+            if (prompt == null) { // do not prompt, create the shortcut
+                input = Messages.getMessage(Installer.class, "promptAnswerYes").toLowerCase();
+            } else {
+                try {
+                    input = promptAndGetUserInput(prompt);
+                } catch (IOException e) {
+                    System.err.println(Messages.getMessage(Installer.class, "responseReadError"));
+                    handleException(e, Level.ERROR);
+                }
             }
             if (input == null || input.isBlank()) {
                 System.out.println(Messages.getMessage(Installer.class, "reprompt"));
@@ -270,18 +310,18 @@ public class Installer extends Thread {
         }
     }
     
-    private static void createDesktopShortcut(String installationDir) {
+    private static void createDesktopShortcut(String installationDir, boolean isPromptNeeded) {
         final String PROMPT = Messages.getMessage(Installer.class, "createDesktopShortcutPrompt");
         final String SUCCESS = Messages.getMessage(Installer.class, "successCreateDesktopShortcut");
         if (AppUtil.isRunningOnWindows()) {
-            createShortcut(PROMPT,
+            createShortcut(isPromptNeeded ? PROMPT : null,
                     new ShortcutCreatorInterface() {
                         public void create() throws Exception {
                             createShortcutOnWindows(CREATE_DEKSTOP_SHORTCUT_ON_WINDOWS, installationDir);
                         }
             }, SUCCESS);
         } else if (AppUtil.isRunningOnMacOS()) {
-            createShortcut(PROMPT,
+            createShortcut(isPromptNeeded ? PROMPT : null,
                     new ShortcutCreatorInterface() {
                         public void create()  throws Exception {
                                 createSymLink(USERHOME + "/Desktop/DataLoader " + AppUtil.DATALOADER_VERSION,
@@ -291,12 +331,12 @@ public class Installer extends Thread {
         }
     }
     
-    private static void createAppsDirShortcut(String installationDir) {
+    private static void createAppsFolderShortcut(String installationDir, boolean isPromptNeeded) {
         final String PROMPT =  Messages.getMessage(Installer.class, "createApplicationsDirShortcutPrompt");
         final String SUCCESS =  Messages.getMessage(Installer.class, "successCreateApplicationsDirShortcut");
 
         if (AppUtil.isRunningOnMacOS()) {
-            createShortcut(PROMPT,
+            createShortcut(isPromptNeeded ? PROMPT : null,
                     new ShortcutCreatorInterface() {
                         public void create() throws Exception {
                             createSymLink("/Applications/DataLoader " + AppUtil.DATALOADER_VERSION,
@@ -306,12 +346,12 @@ public class Installer extends Thread {
         }
     }
     
-    private static void createStartMenuShortcut(String installationDir) {
+    private static void createStartMenuShortcut(String installationDir, boolean isPromptNeeded) {
         final String PROMPT = Messages.getMessage(Installer.class, "createStartMenuShortcutPrompt");
         final String SUCCESS = Messages.getMessage(Installer.class, "successCreateStartMenuShortcut");
 
         if (AppUtil.isRunningOnWindows()) {
-            createShortcut(PROMPT,
+            createShortcut(isPromptNeeded ? PROMPT : null,
                     new ShortcutCreatorInterface() {
                         public void create() throws Exception {
                             String APPDATA = System.getenv("APPDATA");
@@ -325,14 +365,19 @@ public class Installer extends Thread {
     
     private static void createSymLink(String symlink, String target, boolean deleteExisting) throws IOException {
         Path symlinkPath = Paths.get(symlink);
-        if (Files.exists(symlinkPath)) {
-            if (deleteExisting) {
-                logger.debug("Deleting existing symlink " + symlink);
+        if (deleteExisting) {
+            logger.debug("Deleting existing symlink " + symlink);
+            try {
                 Files.delete(symlinkPath);
-            } else {
-                logger.debug("Symlink " + symlink + " exists. Skipping linking it to " + target);
-                return;
+            } catch (NoSuchFileException x) {
+                logger.debug("symlink " + symlink + " does not exist");
+            } catch (IOException ex) {
+                // File permission problems are caught here.
+                logger.warn(ex.getMessage());
             }
+        } else if (Files.exists(symlinkPath)) {
+            logger.debug("Symlink " + symlink + " exists. Skipping linking it to " + target);
+            return;
         }
         logger.debug("going to create symlink: " + symlink + " pointing to " + target);
         Files.createSymbolicLink(symlinkPath, Paths.get(target));

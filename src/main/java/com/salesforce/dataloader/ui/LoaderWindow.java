@@ -36,13 +36,11 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CLabel;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
-import org.eclipse.swt.events.ShellAdapter;
 import org.eclipse.swt.graphics.*;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.*;
-import org.eclipse.swt.events.ShellEvent;
 
 import com.salesforce.dataloader.action.OperationInfo;
 import com.salesforce.dataloader.config.Config;
@@ -103,28 +101,20 @@ public class LoaderWindow extends ApplicationWindow {
         addMenuBar();
         addStatusLine();
         this.controller = controller;
-
-        final ConfigListener listener = new ConfigListener() {
-            @Override
-            public void configValueChanged(String key, String oldValue, String newValue) {
-                if (Config.BULK_API_ENABLED.equals(key)) {
-                    boolean isBulkApiEnabled = false;
-                    if (newValue != null) isBulkApiEnabled = Boolean.valueOf(newValue);
-                    LoaderWindow.this.operationButtonsByIndex.get(OperationInfo.hard_delete).setEnabled(isBulkApiEnabled);
-                    LoaderWindow.this.operationActionsByIndex.get(OperationInfo.hard_delete.getDialogIdx()).setEnabled(
-                            isBulkApiEnabled);
-                    
-                    // disable Undelete button and action if bulk API is enabled
-                    LoaderWindow.this.operationButtonsByIndex.get(OperationInfo.undelete).setEnabled(!isBulkApiEnabled);
-                    LoaderWindow.this.operationActionsByIndex.get(OperationInfo.undelete.getDialogIdx()).setEnabled(
-                            !isBulkApiEnabled);
-                    getShell().redraw();
-                }
-            }
-        };
-
-        this.controller.getConfig().addListener(listener);
-
+    }
+    
+    public void refresh() {
+        Config config = controller.getConfig();
+        boolean isBulkApiFlavorEnabled = config.isBulkAPIEnabled() || config.isBulkV2APIEnabled();
+        LoaderWindow.this.operationButtonsByIndex.get(OperationInfo.hard_delete).setEnabled(isBulkApiFlavorEnabled);
+        LoaderWindow.this.operationActionsByIndex.get(OperationInfo.hard_delete.getDialogIdx()).setEnabled(
+                isBulkApiFlavorEnabled);
+        
+        // disable Undelete button and action if bulk API is enabled
+        LoaderWindow.this.operationButtonsByIndex.get(OperationInfo.undelete).setEnabled(!isBulkApiFlavorEnabled);
+        LoaderWindow.this.operationActionsByIndex.get(OperationInfo.undelete.getDialogIdx()).setEnabled(
+                !isBulkApiFlavorEnabled);
+        getShell().redraw();
     }
 
     public void dispose() {
@@ -147,7 +137,13 @@ public class LoaderWindow extends ApplicationWindow {
      * This runs the Loader Window
      */
     public void run() {
-
+        Config config = controller.getConfig();
+        if (!config.getBoolean(Config.HIDE_WELCOME_SCREEN)) {
+            displayTitleDialog(Display.getDefault(), this.operationActionsByIndex, this.controller.getConfig());
+        }
+        if (config.getBoolean(Config.SHOW_LOADER_UPGRADE_SCREEN)) {
+            displayUpgradeDialog(Display.getDefault());
+        }
         setBlockOnOpen(true);
         open();
 
@@ -198,24 +194,6 @@ public class LoaderWindow extends ApplicationWindow {
         getStatusLineManager().setMessage(Labels.getString("LoaderWindow.chooseAction"));        
         comp.pack();
         parent.pack();
-        addMenuBar();
-        parent.getShell().setFocus();
-        parent.getShell().setActive();
-        parent.getShell().addShellListener(new ShellAdapter() {
-            public void shellActivated(ShellEvent e) {
-                addMenuBar();
-                parent.getShell().setFocus();
-            }
-        });
-
-        Config config = controller.getConfig();
-        if (!config.getBoolean(Config.HIDE_WELCOME_SCREEN)) {
-            displayTitleDialog(Display.getDefault(), this.operationActionsByIndex, this.controller.getConfig());
-        }
-        if (config.getBoolean(Config.SHOW_LOADER_UPGRADE_SCREEN)) {
-            displayUpgradeDialog(Display.getDefault());
-        }
-        
         return parent;
     }
 
@@ -265,7 +243,6 @@ public class LoaderWindow extends ApplicationWindow {
         for (final OperationInfo info : OperationInfo.ALL_OPERATIONS_IN_ORDER) {
             createOperationButton(buttons, info);
         }
-        // buttons.pack();
     }
 
     private void createOperationButton(Composite parent, final OperationInfo info) {

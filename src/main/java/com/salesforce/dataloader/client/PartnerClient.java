@@ -26,6 +26,8 @@
 
 package com.salesforce.dataloader.client;
 
+import com.salesforce.dataloader.action.OperationInfo;
+
 /**
  * The sfdc api client class - implemented using the partner wsdl
  *
@@ -41,6 +43,9 @@ import com.salesforce.dataloader.dyna.SforceDynaBean;
 import com.salesforce.dataloader.exception.ParameterLoadException;
 import com.salesforce.dataloader.exception.PasswordExpiredException;
 import com.salesforce.dataloader.exception.RelationshipFormatException;
+import com.salesforce.dataloader.mapping.LoadMapper;
+import com.salesforce.dataloader.model.Row;
+import com.salesforce.dataloader.util.AppUtil;
 import com.sforce.soap.partner.Connector;
 import com.sforce.soap.partner.DeleteResult;
 import com.sforce.soap.partner.DescribeGlobalResult;
@@ -72,17 +77,16 @@ import org.apache.logging.log4j.LogManager;
 import java.lang.reflect.InvocationTargetException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
-import static com.salesforce.dataloader.ui.UIUtils.validateHttpsUrlAndThrow;
 
 public class PartnerClient extends ClientBase<PartnerConnection> {
 
     private static Logger LOG = LogManager.getLogger(PartnerClient.class);
 
-    PartnerConnection connection;
     private ConnectorConfig connectorConfig = null;
 
     private static interface ClientOperation<RESULT, ARG> {
@@ -123,7 +127,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public UpsertResult[] run(SObject[] sObjects) throws ConnectionException {
-            return getConnection().upsert(config.getString(Config.EXTERNAL_ID_FIELD), sObjects);
+            return getConnection().upsert(config.getString(Config.IDLOOKUP_FIELD), sObjects);
         }
     };
 
@@ -159,6 +163,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public QueryResult run(String queryString) throws ConnectionException {
+            setExportBatchSize();
             return getConnection().query(queryString);
         }
     };
@@ -171,6 +176,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public QueryResult run(String queryString) throws ConnectionException {
+            setExportBatchSize();
             return getConnection().queryAll(queryString);
         }
     };
@@ -183,6 +189,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
         @Override
         public QueryResult run(String queryString) throws ConnectionException {
+            setExportBatchSize();
             return getConnection().queryMore(queryString);
         }
     };
@@ -225,49 +232,42 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
     };
 
     private DescribeGlobalResult describeGlobalResults;
-    private final ReferenceEntitiesDescribeMap referenceEntitiesDescribesMap = new ReferenceEntitiesDescribeMap();
+    private ReferenceEntitiesDescribeMap referenceEntitiesDescribesMap = new ReferenceEntitiesDescribeMap();
     private final Map<String, DescribeGlobalSObjectResult> describeGlobalResultsMap = new HashMap<String, DescribeGlobalSObjectResult>();
     private final Map<String, DescribeSObjectResult> entityFieldDescribesMap = new HashMap<String, DescribeSObjectResult>();
-
-    private final boolean enableRetries;
-    private final int maxRetries;
-
+    private final Map<String, ReferenceEntitiesDescribeMap> parentDescribeCache = new HashMap<String, ReferenceEntitiesDescribeMap>();
     public PartnerClient(Controller controller) {
         super(controller, LOG);
-        int retries = -1;
-        this.enableRetries = config.getBoolean(Config.ENABLE_RETRIES);
-        if (this.enableRetries) {
-            try {
-                // limit the number of max retries in case limit is exceeded
-                retries = Math.min(Config.MAX_RETRIES_LIMIT, config.getInt(Config.MAX_RETRIES));
-            } catch (ParameterLoadException e) {
-                retries = Config.DEFAULT_MAX_RETRIES;
-            }
-        }
-        this.maxRetries = retries;
     }
 
     public boolean connect() throws ConnectionException {
         return login();
     }
 
+    private void setExportBatchSize() {
+        // query header
+        int querySize = Config.DEFAULT_EXPORT_BATCH_SIZE;
+        try {
+            querySize = config.getInt(Config.EXPORT_BATCH_SIZE);
+        } catch (ParameterLoadException e) {
+            querySize = Config.DEFAULT_EXPORT_BATCH_SIZE;
+        }
+        if (querySize <= Config.MIN_EXPORT_BATCH_SIZE) {
+            querySize = Config.MIN_EXPORT_BATCH_SIZE;
+        }
+        if (querySize > Config.MAX_EXPORT_BATCH_SIZE) {
+            querySize = Config.MAX_EXPORT_BATCH_SIZE;
+        }
+        getConnection().setQueryOptions(querySize);
+    }
     @Override
     protected boolean connectPostLogin(ConnectorConfig cc) {
         if (getConnection() == null)
             throw new IllegalStateException("Client should be logged in already");
 
         getConnection().setCallOptions(ClientBase.getClientName(this.config), null);
-        // query header
-        int querySize;
-        try {
-            querySize = config.getInt(Config.EXTRACT_REQUEST_SIZE);
-        } catch (ParameterLoadException e) {
-            querySize = Config.DEFAULT_EXTRACT_REQUEST_SIZE;
-        }
-        if (querySize > 0) {
-            getConnection().setQueryOptions(querySize);
-        }
-
+        setExportBatchSize();
+        
         // assignment rule for update
         if (config.getString(Config.ASSIGNMENT_RULE).length() > 14) {
             String rule = config.getString(Config.ASSIGNMENT_RULE);
@@ -367,31 +367,27 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
         if (op != this.LOGIN_OPERATION && !isSessionValid()) {
             connect();
         }
-        int totalAttempts = 1 + (this.enableRetries ? this.maxRetries : 0);
         ConnectionException connectionException = null;
-        for (int tryNum = 0; tryNum < totalAttempts; tryNum++) {
-            try {
-                R result = op.run(arg);
-                if (result == null)
-                    logger.info(Messages.getString("Client.resultNull")); //$NON-NLS-1$
-                this.getSession().performedSessionActivity(); // reset session activity timer
-                return result;
-            } catch (ConnectionException ex) {
+        try {
+            R result = op.run(arg);
+            if (result == null)
+                logger.info(Messages.getString("Client.resultNull")); //$NON-NLS-1$
+            this.getSession().performedSessionActivity(); // reset session activity timer
+            return result;
+        } catch (ConnectionException ex) {
+            logger.error(
+                    Messages.getFormattedString(
+                            "Client.operationError", new String[]{op.getName(), ex.getMessage()}), ex); //$NON-NLS-1$
+            if (ex instanceof ApiFault) {
+                ApiFault fault = (ApiFault)ex;
+                String faultMessage = fault.getExceptionMessage();
                 logger.error(
                         Messages.getFormattedString(
-                                "Client.operationError", new String[]{op.getName(), ex.getMessage()}), ex); //$NON-NLS-1$
-                if (ex instanceof ApiFault) {
-                    ApiFault fault = (ApiFault)ex;
-                    String faultMessage = fault.getExceptionMessage();
-                    logger.error(
-                            Messages.getFormattedString(
-                                    "Client.operationError", new String[]{op.getName(), faultMessage}), fault); //$NON-NLS-1$
+                                "Client.operationError", new String[]{op.getName(), faultMessage}), fault); //$NON-NLS-1$
 
-                }
-                // check retries
-                if (!checkConnectionException(ex, op.getName(), tryNum)) throw ex;
-                connectionException = ex;
             }
+            // check retries
+            connectionException = ex;
         }
         throw connectionException;
     }
@@ -521,11 +517,6 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
         }
     }
 
-    @Override
-    public PartnerConnection getConnection() {
-        return this.connection;
-    }
-
     public Map<String, DescribeGlobalSObjectResult> getDescribeGlobalResults() {
         if (this.describeGlobalResults == null || !config.getBoolean(Config.CACHE_DESCRIBE_GLOBAL_RESULTS)) {
             this.describeGlobalResultsMap.clear();
@@ -589,35 +580,34 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
     private boolean login() throws ConnectionException, ApiFault {
         disconnect();
+        String origEndpoint = new String(config.getAuthEndpoint());
         try {
             dologin();
-            logger.debug("able to successfully invoke server APIs of version " + apiVersionForTheSession);
+            logger.debug("able to successfully invoke server APIs of version " + getAPIVersionForTheSession());
         } catch (UnexpectedErrorFault fault) {
             if (fault.getExceptionCode() == ExceptionCode.UNSUPPORTED_API_VERSION) {
-                logger.error("Failed to successfully invoke server APIs of version " + apiVersionForTheSession);
-                apiVersionForTheSession = getPreviousAPIVersionInWSC();
+                logger.error("Failed to successfully invoke server APIs of version " + getAPIVersionForTheSession());
+                setAPIVersionForTheSession(getPreviousAPIVersionInWSC());
                 login();
             } else {
                 logger.error("Failed to get user info using manually configured session id", fault);
                 throw fault;
             }
         } catch (ConnectionException e) {
-            String authEndpoint = config.getString(Config.ENDPOINT);
             logger.warn(Messages.getMessage(this.getClass(), "failedUsernamePasswordAuth", 
-                                            authEndpoint, Config.ENDPOINT, e.getMessage()));
-            if (authEndpoint.contains(Config.LIGHTNING_ENDPOINT_URL_PART_VAL)) {
-                authEndpoint = authEndpoint.replace(Config.LIGHTNING_ENDPOINT_URL_PART_VAL, Config.MYSF_ENDPOINT_URL_PART_VAL);
-                config.setValue(Config.ENDPOINT, authEndpoint);
-                logger.info(Messages.getMessage(this.getClass(), "retryUsernamePasswordAuth", authEndpoint, Config.ENDPOINT));
-                login();
-            } else if (!authEndpoint.equals(Config.DEFAULT_ENDPOINT_URL)) {
-                config.setValue(Config.ENDPOINT, Config.DEFAULT_ENDPOINT_URL);
-                logger.info(Messages.getMessage(this.getClass(), "retryUsernamePasswordAuth", Config.DEFAULT_ENDPOINT_URL, Config.ENDPOINT));
+                                            origEndpoint, config.getString(Config.SELECTED_AUTH_ENVIRONMENT), e.getMessage()));
+            if (!config.isDefaultAuthEndpoint(origEndpoint)) {
+                // retry with default endpoint URL only if user is attempting production login
+                config.setAuthEndpoint(config.getDefaultAuthEndpoint());
+                logger.info(Messages.getMessage(this.getClass(), "retryUsernamePasswordAuth", config.getDefaultAuthEndpoint(), config.getString(Config.SELECTED_AUTH_ENVIRONMENT)));
                 login();
             } else {
                 logger.error("Failed to get user info using manually configured session id", e);
                 throw e;   
             }
+        } finally {
+            // restore original value of Config.ENDPOINT property
+            config.setAuthEndpoint(origEndpoint);
         }
         return true; // exception thrown if there is an issue with login
     }
@@ -625,7 +615,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
     private boolean dologin() throws ConnectionException, ApiFault {
         // Attempt the login giving the user feedback
         logger.info(Messages.getString("Client.sforceLogin")); //$NON-NLS-1$
-        final ConnectorConfig cc = getLoginConnectorConfig();
+        ConnectorConfig cc = getLoginConnectorConfig();
         boolean savedIsTraceMessage = cc.isTraceMessage();
         cc.setTraceMessage(false);
         PartnerConnection conn = Connector.newConnection(cc);
@@ -635,6 +625,10 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
         String oauthAccessToken = config.getString(Config.OAUTH_ACCESSTOKEN);
         try {
             if (oauthAccessToken != null && oauthAccessToken.trim().length() > 0) {
+                cc = getLoginConnectorConfig(config.getString(Config.OAUTH_INSTANCE_URL));
+                savedIsTraceMessage = cc.isTraceMessage();
+                cc.setTraceMessage(false);
+                conn = Connector.newConnection(cc);
                 conn = setConfiguredSessionId(conn, oauthAccessToken, null);
             } else if (config.getBoolean(Config.SFDC_INTERNAL) && config.getBoolean(Config.SFDC_INTERNAL_IS_SESSION_ID_LOGIN)) {
                 conn = setConfiguredSessionId(conn, config.getString(Config.SFDC_INTERNAL_SESSION_ID), null);
@@ -667,7 +661,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
         if (userInfo == null) {
             userInfo = conn.getUserInfo(); // check to make sure we have a good connection
         }
-        loginSuccess(conn, getServerUrl(config.getString(Config.ENDPOINT)), userInfo);
+        loginSuccess(conn, getAuthenticationHostDomainUrl(config.getAuthEndpoint()), userInfo);
         return conn;
     }
 
@@ -685,7 +679,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
             // update session id and service endpoint based on response
             conn.setSessionHeader(loginResult.getSessionId());
             String serverUrl = loginResult.getServerUrl();
-            String server = getServerUrl(serverUrl);
+            String server = getAuthenticationHostDomainUrl(serverUrl);
             if (config.getBoolean(Config.RESET_URL_ON_LOGIN)) {
                 cc.setServiceEndpoint(serverUrl);
             }
@@ -697,7 +691,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
     }
 
     private void loginSuccess(PartnerConnection conn, String serv, GetUserInfoResult userInfo) {
-        this.connection = conn;
+        setConnection(conn);
         setSession(conn.getSessionHeader().getSessionId(), serv, userInfo);
     }
 
@@ -705,17 +699,18 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
         return url.getProtocol() + "://" + url.getAuthority();
     }
 
-    private String getServerUrl(String serverUrl) {
+    private String getAuthenticationHostDomainUrl(String serverUrl) {
         if (config.getBoolean(Config.RESET_URL_ON_LOGIN)) {
             try {
-                validateHttpsUrlAndThrow(serverUrl);
                 return getServerStringFromUrl(new URL(serverUrl));
             } catch (MalformedURLException e) {
                 logger.fatal("Unexpected error", e);
                 throw new RuntimeException(e);
             }
         }
-        return getDefaultServer();
+        // Either RESET_URL_ON_LOGIN is false or input param serverURL 
+        // is invalid. Try returning configured Auth endpoint instead.
+        return config.getAuthEndpoint();
     }
 
     public boolean logout() {
@@ -733,28 +728,7 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
 
     public void disconnect() {
         clearSession();
-        this.connection = null;
-    }
-
-    /**
-     * @param operationName
-     */
-    private void retrySleep(String operationName, int retryNum) {
-        int sleepSecs;
-        try {
-            sleepSecs = config.getInt(Config.MIN_RETRY_SLEEP_SECS);
-        } catch (ParameterLoadException e1) {
-            sleepSecs = Config.DEFAULT_MIN_RETRY_SECS;
-        }
-        // sleep between retries is based on the retry attempt #. Sleep for longer periods with each retry
-        sleepSecs = sleepSecs + (retryNum * 10); // sleep for MIN_RETRY_SLEEP_SECS + 10, 20, 30, etc.
-
-        logger.info(Messages.getFormattedString("Client.retryOperation", new String[]{Integer.toString(retryNum + 1),
-                operationName, Integer.toString(sleepSecs)}));
-        try {
-            Thread.sleep(sleepSecs * 1000);
-        } catch (InterruptedException e) { // ignore
-        }
+        setConnection(null);
     }
 
     /**
@@ -763,29 +737,92 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
      * @throws ConnectionException
      */
     public void setFieldReferenceDescribes() throws ConnectionException {
-        referenceEntitiesDescribesMap.clear();
         if (getFieldTypes() == null) {
             setFieldTypes();
         }
+        Collection<String> mappedSFFields = null;
         if (getDescribeGlobalResults() != null) {
-            Field[] entityFields = getFieldTypes().getFields();
-
-            for (Field childObjectField : entityFields) {
-                // upsert on references (aka foreign keys) is supported only
-                // 1. When field has relationship is set and refers to exactly one object
-                // 2. When field is either createable or updateable. If neither is true, upsert will never work for that
-                // relationship.
-                String[] parentObjectNames = childObjectField.getReferenceTo();
-                String relationshipName = childObjectField.getRelationshipName();
-                if (parentObjectNames == null || parentObjectNames.length == 0 || parentObjectNames[0] == null
-                    || relationshipName == null || relationshipName.length() == 0
-                    || (!childObjectField.isCreateable() && !childObjectField.isUpdateable())) {
-                    // parent-child relationship either does not exist or
-                    // it is neither modifiable nor updateable.
-                    continue;
+            String operation = config.getString(Config.OPERATION);
+            if (AppUtil.getAppRunMode() == AppUtil.APP_RUN_MODE.BATCH
+                    && operation != null
+                    && !operation.isBlank()
+                    && config.getOperationInfo() != OperationInfo.extract
+                    && config.getOperationInfo() != OperationInfo.extract_all) {
+                // import operation in batch mode
+                LoadMapper mapper = (LoadMapper)controller.getMapper();
+                // call describe only for mapped fields
+                mappedSFFields = mapper.getDestColumns();
+            }
+            setFieldReferenceDescribes(mappedSFFields);
+        }
+    }
+    
+    public void setFieldReferenceDescribes(Collection<String> sfFields) throws ConnectionException {
+        if (config.getBoolean(Config.CACHE_DESCRIBE_GLOBAL_RESULTS)) {
+            referenceEntitiesDescribesMap = parentDescribeCache.get(config.getString(Config.ENTITY));
+        } else {
+            referenceEntitiesDescribesMap.clear();
+        }
+        if (referenceEntitiesDescribesMap == null) {
+            referenceEntitiesDescribesMap = new ReferenceEntitiesDescribeMap();
+        }
+        if (referenceEntitiesDescribesMap.size() > 0) {
+            return; // use cached value
+        }
+        Field[] entityFields = getFieldTypes().getFields();
+        boolean useMappedLookupRelationshipNamesForRefDescribes = false;
+        ArrayList<String> relFieldsNeedingRefDescribes = new ArrayList<String>();
+        if (sfFields != null && !sfFields.isEmpty()) {
+            useMappedLookupRelationshipNamesForRefDescribes = true;
+            for (String mappedFieldList : sfFields) {
+                String[]mappedFields = mappedFieldList.split(",");
+                for (String field : mappedFields) {
+                    try {
+                        ParentIdLookupFieldFormatter lookupFieldFormatter = new ParentIdLookupFieldFormatter(field);
+                        if (lookupFieldFormatter.getParent() != null
+                            && lookupFieldFormatter.getParentFieldName() != null) {
+                            String relationshipNameInMappedField = lookupFieldFormatter.getParent().getRelationshipName();
+                            if (relationshipNameInMappedField == null) {
+                                useMappedLookupRelationshipNamesForRefDescribes = false;
+                                break;
+                            } else {
+                                relFieldsNeedingRefDescribes.add(relationshipNameInMappedField);
+                            }
+                        }
+                    } catch (RelationshipFormatException e) {
+                     // do not optimize getting lookup field describes
+                        useMappedLookupRelationshipNamesForRefDescribes = false;
+                        break;
+                    }
                 }
+                if (!useMappedLookupRelationshipNamesForRefDescribes) {
+                    relFieldsNeedingRefDescribes.clear();
+                    break;
+                }
+            }
+        }
+
+        for (Field childObjectField : entityFields) {
+            // verify that the sobject field represents a relationship field where
+            // the sobject is a child with one or more parent sobjects.
+            String[] parentObjectNames = childObjectField.getReferenceTo();
+            String relationshipName = childObjectField.getRelationshipName();
+            if (parentObjectNames == null || parentObjectNames.length == 0 || parentObjectNames[0] == null
+                || relationshipName == null || relationshipName.length() == 0
+                || (!childObjectField.isCreateable() && !childObjectField.isUpdateable())) {
+                // parent-child relationship either does not exist or
+                // it is neither modifiable nor updateable.
+                continue;
+            }
+            if (!useMappedLookupRelationshipNamesForRefDescribes
+                || relFieldsNeedingRefDescribes.contains(relationshipName)) {
                 processParentObjectArrayForLookupReferences(parentObjectNames, childObjectField);
             }
+        }
+        if (config.getBoolean(Config.CACHE_DESCRIBE_GLOBAL_RESULTS)
+            && sfFields == null) {
+            // got the full list of parents' describes for an sobject
+            parentDescribeCache.put(config.getString(Config.ENTITY), referenceEntitiesDescribesMap);
         }
     }
     
@@ -844,25 +881,18 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
     }
     
     public static String getServicePath() {
-        // Auth endpoint is a SOAP service
-        return ClientBase.getServicePathWithAPIVersion(DEFAULT_AUTH_ENDPOINT_URL.getPath());
+        return "/services/Soap/u/" + getAPIVersionForTheSession() + "/";
     }
 
     private synchronized ConnectorConfig getLoginConnectorConfig() {
-        this.connectorConfig = getConnectorConfig();
-        String serverUrl = getDefaultServer();
-        this.connectorConfig.setAuthEndpoint(serverUrl + getServicePath());
-        this.connectorConfig.setServiceEndpoint(serverUrl + getServicePath());
-        return this.connectorConfig;
+        return getLoginConnectorConfig(config.getAuthEndpoint());
     }
-
-    private String getDefaultServer() {
-        String serverUrl = config.getString(Config.ENDPOINT);
-        if (serverUrl == null || serverUrl.length() == 0) {
-            serverUrl = getServerStringFromUrl(DEFAULT_AUTH_ENDPOINT_URL);
-        }
-        validateHttpsUrlAndThrow(serverUrl);
-        return serverUrl;
+    
+    private synchronized ConnectorConfig getLoginConnectorConfig(String serverURL) {
+        this.connectorConfig = getConnectorConfig();
+        this.connectorConfig.setAuthEndpoint(serverURL + getServicePath());
+        this.connectorConfig.setServiceEndpoint(serverURL + getServicePath());
+        return this.connectorConfig;
     }
 
     /**
@@ -885,24 +915,19 @@ public class PartnerClient extends ClientBase<PartnerConnection> {
         }
         return result;
     }
-
-    /**
-     * Checks whether retry makes sense for the given exception and given the number of current vs. max retries. If
-     * retry makes sense, then before returning, this method will put current thread to sleep before allowing another
-     * retry.
-     *
-     * @param ex
-     * @param operationName
-     * @return true if retry should be executed for operation. false if there's no retry.
-     */
-    private boolean checkConnectionException(ConnectionException ex, String operationName, int retryNum) {
-        if (!this.enableRetries) return false;
-        final String msg = ex.getMessage();
-        if (msg != null && msg.toLowerCase().indexOf("connection reset") >= 0) {
-            retrySleep(operationName, retryNum);
-            return true;
+    
+    public Field[] getSObjectFieldAttributesForRow(String sObjectName, Row dataRow) throws ConnectionException {
+        ArrayList<Field> attributesForRow = new ArrayList<Field>();
+        DescribeSObjectResult entityDescribe = describeSObject(sObjectName);
+        for (Map.Entry<String, Object> dataRowField : dataRow.entrySet()) {
+            Field[] fieldAttributesArray = entityDescribe.getFields();
+            for (Field fieldAttributes : fieldAttributesArray) {
+                if (fieldAttributes.getName().equalsIgnoreCase(dataRowField.getKey())) {
+                    attributesForRow.add(fieldAttributes);
+                }
+            }
         }
-        return false;
+        return attributesForRow.toArray(new Field[1]);
     }
 
     private final Map<String, Field> fieldsByName = new HashMap<String, Field>();

@@ -4,7 +4,7 @@
   <groupId>com.force</groupId>
   <artifactId>dataloader</artifactId>
   <packaging>jar</packaging>
-  <version>60.0.2</version>
+  <version>62.0.1</version>
   <name>Salesforce Data Loader</name>
   <url>https://github.com/forcedotcom/dataloader</url>
   <organization>
@@ -17,7 +17,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
     <!-- test properties -->
-    <test.endpoint>http://testendpoint</test.endpoint>
+    <test.endpoint>https://testendpoint</test.endpoint>
     <test.user.default>admin@org.com</test.user.default>
     <test.user.restricted>standard@org.com</test.user.restricted>
     <test.password></test.password><!-- use the encrypted password -->
@@ -48,19 +48,19 @@
     <dependency>
       <groupId>local.swt</groupId>
       <artifactId>swtmac_aarch64</artifactId>
-      <version>4.30</version>
+      <version>4.32</version>
     </dependency>
 <!-- https://mvnrepository.com/artifact/com.google.code.gson/gson -->
     <dependency>
       <groupId>com.google.code.gson</groupId>
       <artifactId>gson</artifactId>
-      <version>2.10.1</version>
+      <version>2.11.0</version>
     </dependency>
 <!-- https://mvnrepository.com/artifact/com.force.api/force-partner-api -->
     <dependency>
       <groupId>com.force.api</groupId>
       <artifactId>force-partner-api</artifactId>
-      <version>60.1.1</version>
+      <version>62.0.0</version>
       <exclusions>
         <exclusion>
             <groupId>commons-logging</groupId>
@@ -108,13 +108,13 @@
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-context</artifactId>
-      <version>6.1.5</version>
+      <version>6.1.12</version>
     </dependency>
 <!-- https://mvnrepository.com/artifact/org.eclipse.platform/org.eclipse.jface --> 
     <dependency>
       <groupId>org.eclipse.platform</groupId>
       <artifactId>org.eclipse.jface</artifactId>
-      <version>3.33.0</version>
+      <version>3.34.0</version>
       <exclusions>
         <exclusion>
           <groupId>org.eclipse.platform</groupId>
@@ -126,7 +126,7 @@
     <dependency>
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-text</artifactId>
-        <version>1.11.0</version>
+        <version>1.12.0</version>
     </dependency>
 
 <!-- Testing dependencies -->
@@ -134,7 +134,7 @@
     <dependency>
       <groupId>com.h2database</groupId>
       <artifactId>h2</artifactId>
-      <version>2.2.224</version>
+      <version>2.3.232</version>
       <scope>test</scope>
     </dependency>
 <!-- https://mvnrepository.com/artifact/junit/junit -->
@@ -148,14 +148,14 @@
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-jdbc</artifactId>
-      <version>6.1.5</version>
+      <version>6.1.12</version>
       <scope>test</scope>
     </dependency>
 <!-- https://mvnrepository.com/artifact/org.mockito/mockito-core -->
     <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-core</artifactId>
-      <version>5.11.0</version>
+      <version>5.13.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -198,7 +198,7 @@
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>versions-maven-plugin</artifactId>
-        <version>2.16.2</version>
+        <version>2.17.1</version>
       </plugin>
 <!-- plugins inherited from parent whose version needs to be specified
      to clear mvn versions:display-plugin-updates
@@ -207,25 +207,25 @@
     <plugin>
       <groupId>org.apache.maven.plugins</groupId>
       <artifactId>maven-clean-plugin</artifactId>
-      <version>3.3.2</version>
+      <version>3.4.0</version>
     </plugin>
 <!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-deploy-plugin -->
 	<plugin>
 	  <groupId>org.apache.maven.plugins</groupId>
 	  <artifactId>maven-deploy-plugin</artifactId>
-	  <version>3.1.1</version>
+	  <version>3.1.3</version>
 	</plugin>
 <!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-install-plugin -->
 	<plugin>
 	  <groupId>org.apache.maven.plugins</groupId>
 	  <artifactId>maven-install-plugin</artifactId>
-	  <version>3.1.1</version>
+	  <version>3.1.3</version>
 	</plugin>
 <!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-jar-plugin -->
 	<plugin>
 	  <groupId>org.apache.maven.plugins</groupId>
 	  <artifactId>maven-jar-plugin</artifactId>
-      <version>3.3.0</version>
+      <version>3.4.2</version>
       <configuration>
           <excludes>
             <exclude>contrib/**</exclude>
@@ -236,7 +236,7 @@
 	<plugin>
 	  <groupId>org.apache.maven.plugins</groupId>
 	  <artifactId>maven-site-plugin</artifactId>
-	  <version>3.12.1</version>
+	  <version>3.20.0</version>
 	</plugin>
 
 <!-- plugins explicitly included in the project -->
@@ -244,7 +244,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
-        <version>3.4.1</version>
+        <version>3.5.0</version>
         <executions>
           <execution>
             <id>enforce-maven</id>
@@ -298,7 +298,7 @@
       <plugin>
           <groupId>com.mycila</groupId>
           <artifactId>license-maven-plugin</artifactId>
-          <version>4.3</version>
+          <version>4.5</version>
           <configuration>
             <licenseSets>
               <licenseSet>
@@ -325,7 +325,7 @@
 <!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-shade-plugin -->
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
-        <version>3.5.2</version>
+        <version>3.6.0</version>
         <configuration>
           <createDependencyReducedPom>false</createDependencyReducedPom>
           <artifactSet>
@@ -417,6 +417,20 @@
                 <copy todir="${basedir}/target/classes/linux/"  flatten="true">
                   <fileset dir="${basedir}/local-proj-repo/local/swt/" includes="swtlinux*/*/*.jar"/>
                 </copy>
+                
+                <apply executable="zip">
+                    <arg value="-d"/>
+                    <srcfile/>
+                    <arg value="META-INF/ECLIPSE_.SF"/>
+                    <arg value="META-INF/ECLIPSE_.DSA"/>
+                    <arg value="META-INF/ECLIPSE_.RSA"/>
+                    <fileset dir="${basedir}/target/classes/">
+                        <patternset>
+                          <include name="**/*.jar"/>
+                        </patternset>
+                    </fileset>
+                </apply>
+
 
                 <mkdir dir="${basedir}/target/zipartifacts"/>
                 <copy file="${basedir}/release/install/install.command" 
@@ -486,7 +500,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>3.2.5</version>
+        <version>3.5.0</version>
         <configuration>
           <!-- skip unit and integration tests during maven's test phase -->
           <skipTests>true</skipTests>

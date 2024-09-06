@@ -263,10 +263,10 @@ abstract class TestBase {
         ConnectorConfig bindingConfig = new ConnectorConfig();
         bindingConfig.setUsername(getController().getConfig().getString(Config.USERNAME));
         bindingConfig.setPassword(getController().getConfig().getString(Config.PASSWORD));
-        String configEndpoint = getController().getConfig().getString(Config.ENDPOINT);
+        String configEndpoint = getController().getConfig().getAuthEndpoint();
         if (!configEndpoint.equals("")) { //$NON-NLS-1$
             try {
-                PartnerClient.setAPIVersion(apiVersionStr);
+                PartnerClient.setAPIVersionForTheSession(apiVersionStr);
                 bindingConfig.setAuthEndpoint(configEndpoint + PartnerClient.getServicePath());
                 bindingConfig.setServiceEndpoint(configEndpoint + PartnerClient.getServicePath()); // Partner SOAP service
                 bindingConfig.setRestEndpoint(configEndpoint + BulkV1Client.getServicePath());  // REST service: Bulk v1       

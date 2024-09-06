@@ -47,7 +47,7 @@ import com.salesforce.dataloader.exception.DataAccessObjectException;
 import com.salesforce.dataloader.exception.MappingInitializationException;
 import com.salesforce.dataloader.util.DAORowUtil;
 
-public class DataSelectionDialog extends BaseDialog {
+public class DataSelectionDialog extends WizardDialog {
     private Button ok;
     private Label label;
     private ContentLimitLink contentNoteLimitLink;
@@ -123,7 +123,6 @@ public class DataSelectionDialog extends BaseDialog {
         List<String> header = null;
         int totalRows = 0;
         try {
-            dataReader.checkConnection();
             dataReader.open();
 
             String error = DAORowUtil.validateColumns(dataReader);
@@ -166,9 +165,9 @@ public class DataSelectionDialog extends BaseDialog {
         label.setText(Labels.getFormattedString(
                 "DataSelectionDialog.initSuccess", String.valueOf(totalRows))
                 + "\n\n"
-                + Labels.getString("AdvancedSettingsDialog.batchSize")
+                + Labels.getString("LoadPage.importBatchSize")
                 + " "
-                + getController().getConfig().getString(String.valueOf(getController().getConfig().getLoadBatchSize()))
+                + getController().getConfig().getImportBatchSize()
                 + "\n"
                 + Labels.getString("AdvancedSettingsDialog.startRow")
                 + " "

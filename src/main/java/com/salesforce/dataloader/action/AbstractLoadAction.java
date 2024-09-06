@@ -28,6 +28,7 @@ package com.salesforce.dataloader.action;
 
 import com.salesforce.dataloader.action.progress.ILoaderProgress;
 import com.salesforce.dataloader.action.visitor.DAOLoadVisitor;
+import com.salesforce.dataloader.client.PartnerClient;
 import com.salesforce.dataloader.config.Config;
 import com.salesforce.dataloader.controller.Controller;
 import com.salesforce.dataloader.dao.DataAccessObject;
@@ -41,9 +42,14 @@ import com.salesforce.dataloader.exception.ParameterLoadException;
 import com.salesforce.dataloader.mapping.LoadMapper;
 import com.salesforce.dataloader.model.Row;
 import com.salesforce.dataloader.util.DAORowUtil;
+import com.sforce.soap.partner.DescribeGlobalSObjectResult;
+import com.sforce.soap.partner.DescribeSObjectResult;
+import com.sforce.soap.partner.Field;
+import com.sforce.soap.partner.FieldType;
 import com.sforce.ws.ConnectionException;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * @author Lexi Viripaeff
@@ -77,7 +83,7 @@ abstract class AbstractLoadAction extends AbstractAction {
     protected boolean visit() throws DataAccessObjectException, ParameterLoadException, OperationException,
     ConnectionException {
 
-        final int loadBatchSize = this.getConfig().getLoadBatchSize();
+        final int loadBatchSize = this.getConfig().getImportBatchSize();
         final int daoRowNumBase = getDao().getCurrentRowNumber();
         final List<Row> daoRowList = getDao().readRowList(loadBatchSize);
         if (daoRowList == null || daoRowList.size() == 0) return false;

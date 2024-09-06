@@ -26,11 +26,8 @@
 package com.salesforce.dataloader.client;
 
 import java.io.FileNotFoundException;
-import java.net.MalformedURLException;
-import java.net.URL;
 
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.LogManager;
 
 import com.salesforce.dataloader.client.SessionInfo.NotLoggedInException;
 import com.salesforce.dataloader.config.Config;
@@ -49,34 +46,25 @@ import com.sforce.ws.ConnectorConfig;
  */
 public abstract class ClientBase<ConnectionType> {
 
-    private static Logger LOG = LogManager.getLogger(PartnerClient.class);
-
-    protected static final URL DEFAULT_AUTH_ENDPOINT_URL;
-    static {
-        URL loginUrl;
-        try {
-            loginUrl = new URL(Connector.END_POINT);
-        } catch (MalformedURLException ex) {
-            LOG.error(ex);
-            throw new RuntimeException(ex);
-        }
-        DEFAULT_AUTH_ENDPOINT_URL = loginUrl;
-    }
-
-    public static final String BULKV1_ENDPOINT_PATH = "/services/async/" + getCurrentAPIVersionInWSC();
-    public static final String BULKV2_ENDPOINT_PATH = "/services/data/v" + getCurrentAPIVersionInWSC() + "/jobs/";
-    protected static String apiVersionForTheSession = getCurrentAPIVersionInWSC();
+    private static String apiVersionForTheSession = getCurrentAPIVersionInWSC();
 
     protected final Logger logger;
     protected final Controller controller;
     protected final Config config;
+    private ConnectionType connectionType;
 
     private SessionInfo session = new SessionInfo();
 
     protected abstract boolean connectPostLogin(ConnectorConfig connectorConfig);
 
-    public abstract ConnectionType getConnection();
-
+    public ConnectionType getConnection() {
+        return this.connectionType;
+    }
+    
+    protected void setConnection(ConnectionType connType) {
+        this.connectionType = connType;
+    }
+    
     protected ClientBase(Controller controller, Logger logger) {
         this.controller = controller;
         this.config = controller.getConfig();
@@ -94,15 +82,19 @@ public abstract class ClientBase<ConnectionType> {
 
     private static final String BASE_CLIENT_NAME = "DataLoader";
     private static final String BULK_API_CLIENT_TYPE = "Bulk";
+    private static final String BULK_V2_API_CLIENT_TYPE = "Bulkv2";
     private static final String PARTNER_API_CLIENT_TYPE = "Partner";
     private static final String BATCH_CLIENT_STRING = "Batch";
     private static final String UI_CLIENT_STRING = "UI";
+    public static final String SFORCE_CALL_OPTIONS_HEADER = "Sforce-Call-Options";
 
     public static String getClientName(Config cfg) {
-        String apiType = cfg.isBulkAPIEnabled() ? BULK_API_CLIENT_TYPE : PARTNER_API_CLIENT_TYPE;
+        String apiType = PARTNER_API_CLIENT_TYPE;
         final String interfaceType = cfg.isBatchMode() ? BATCH_CLIENT_STRING : UI_CLIENT_STRING;
-        if (cfg.isBulkAPIEnabled() && cfg.isBulkV2APIEnabled()) {
-            apiType = apiType + "v2";
+        if (cfg.isBulkAPIEnabled()) {
+            apiType = BULK_API_CLIENT_TYPE;
+        }else if (cfg.isBulkV2APIEnabled()) {
+            apiType = BULK_V2_API_CLIENT_TYPE;
         }
         return new StringBuilder(32).append(BASE_CLIENT_NAME).append(apiType).append(interfaceType)
                 .append("/")
@@ -110,11 +102,11 @@ public abstract class ClientBase<ConnectionType> {
                 .toString(); //$NON-NLS-1$
     }
     
-    public static String getAPIVersion() {
+    public static synchronized String getAPIVersionForTheSession() {
         return apiVersionForTheSession;
     }
     
-    public static synchronized void setAPIVersion(String version) {
+    public static synchronized void setAPIVersionForTheSession(String version) {
         apiVersionForTheSession = version;
     }
 
@@ -122,7 +114,7 @@ public abstract class ClientBase<ConnectionType> {
         ConnectorConfig cc = new ConnectorConfig();
         cc.setTransport(HttpClientTransport.class);
         cc.setSessionId(getSessionId());
-        cc.setRequestHeader("Sforce-Call-Options",
+        cc.setRequestHeader(SFORCE_CALL_OPTIONS_HEADER,
                 "client=" + ClientBase.getClientName(this.config));      
         // set authentication credentials
         // blank username is not acceptible
@@ -214,6 +206,8 @@ public abstract class ClientBase<ConnectionType> {
             cc.setServiceEndpoint(server + PartnerClient.getServicePath()); // Partner SOAP service
             cc.setRestEndpoint(server + BulkV1Client.getServicePath());  // REST service: Bulk v1
         }
+        cc.setTraceMessage(config.getBoolean(Config.WIRE_OUTPUT));
+
         return cc;
     }
     
@@ -228,17 +222,6 @@ public abstract class ClientBase<ConnectionType> {
         String currentMajorVerStr = versionStrArray[0];
         int currentMajorVer = Integer.parseInt(currentMajorVerStr);
         return Integer.toString(currentMajorVer-1) + ".0";
-    }
-    
-    // used for SOAP and Bulk v1 service endpoints but not for bulk v2 service
-    protected static String getServicePathWithAPIVersion(String path) {
-        String[] pathPartArray = path.split("\\/");
-        pathPartArray[pathPartArray.length-1] = apiVersionForTheSession;
-        StringBuffer buf = new StringBuffer();
-        for (int i = 0; i < pathPartArray.length; i++) {
-            buf.append(pathPartArray[i] + "/");
-        }
-        return buf.toString();
     }
 
     public SessionInfo getSession() {

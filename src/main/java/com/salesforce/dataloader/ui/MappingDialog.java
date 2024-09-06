@@ -34,7 +34,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.ListIterator;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -77,7 +76,7 @@ import com.sforce.soap.partner.Field;
 /**
  * This class creates the mapping dialog
  */
-public class MappingDialog extends BaseDialog {
+public class MappingDialog extends WizardDialog {
     //the two tableViewers
     private TableViewer sforceTblViewer;
     private TableViewer mappingTblViewer;
@@ -106,6 +105,7 @@ public class MappingDialog extends BaseDialog {
     private Shell parentShell;
     private Shell dialogShell;
     private Text sforceFieldsSearch;
+    private boolean dragNDropCancelled = false;
 
     public void setSforceFieldInfo(Field[] sforceFieldInfo) {
         this.sforceFieldInfo = sforceFieldInfo;
@@ -300,7 +300,7 @@ public class MappingDialog extends BaseDialog {
             public void widgetSelected(SelectionEvent event) {
 
                 //revert the Mapping back
-                mapper.clearMap();
+                mapper.clearMappings();
                 mapper.putPropertyFileMappings(restore);
 
                 shell.close();
@@ -311,6 +311,14 @@ public class MappingDialog extends BaseDialog {
         // user can type input and press Enter
         // to dismiss
         shell.setDefaultButton(ok);
+    }
+    
+    public void setIsDragNDropCancelled(boolean cancelled) {
+        this.dragNDropCancelled = cancelled;
+    }
+    
+    public boolean isDragActionCancelled() {
+        return this.dragNDropCancelled;
     }
 
     private void initializeMappingViewer(Shell shell) {
@@ -496,7 +504,7 @@ public class MappingDialog extends BaseDialog {
 
     private void autoMatchFields() {
 
-        LinkedList<Field> fieldList = new LinkedList<Field>(Arrays.asList(sforceFields));
+        ArrayList<Field> fieldList = new ArrayList<Field>(Arrays.asList(sforceFields));
         //first match on name, then label
         ListIterator<Field> iterator = fieldList.listIterator();
         Field field;
@@ -520,7 +528,7 @@ public class MappingDialog extends BaseDialog {
 
             if(mappingSource != null) {
                 // don't overwrite the fields that already have been mapped
-                String oldFieldName = mapper.getMapping(mappingSource);
+                String oldFieldName = mapper.getMapping(mappingSource, false, true);
                 if(oldFieldName == null || oldFieldName.length() == 0) {
                     mapper.putMapping(mappingSource, fieldName);
                 }
@@ -544,6 +552,7 @@ public class MappingDialog extends BaseDialog {
         for (int i = 0, n = mappingTable.getColumnCount(); i < n; i++) {
             mappingTable.getColumn(i).pack();
         }
+        mappingTblViewer.setInput(this.mapper);
         mappingTblViewer.refresh();
         mappingTable.redraw();
         UIUtils.setTableColWidth(mappingTable);
@@ -591,7 +600,7 @@ public class MappingDialog extends BaseDialog {
         Field field;
         Config config = getController().getConfig();
         OperationInfo operation = config.getOperationInfo();
-        String extIdField = config.getString(Config.EXTERNAL_ID_FIELD);
+        String extIdField = config.getString(Config.IDLOOKUP_FIELD);
         if(extIdField == null) {
             extIdField = "";
         } else {
@@ -609,6 +618,13 @@ public class MappingDialog extends BaseDialog {
                 }
                 break;
             case delete:
+                if (getController().getConfig().isRESTAPIEnabled()
+                        && Controller.getAPIMajorVersion() >= 61
+                        && getController().getConfig().getBoolean(Config.DELETE_WITH_EXTERNALID) 
+                        && field.isIdLookup()) {
+                    isMappable = true;
+                }
+                // do not break here. Continue to cover id field.
             case undelete:
             case hard_delete:
                 if (field.getType().toString().toLowerCase().equals("id")) {
@@ -652,7 +668,7 @@ public class MappingDialog extends BaseDialog {
      * Clears the mapping
      */
     private void clearMapping() {
-        mapper.clearMap();
+        mapper.clearMappings();
         // restore the fields in sforceTblViewer that were mapped before
         for(String fieldName : mappedFields) {
             replenishMappedSforceFields(fieldName);

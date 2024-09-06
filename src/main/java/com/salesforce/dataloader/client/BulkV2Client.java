@@ -28,32 +28,24 @@ package com.salesforce.dataloader.client;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import com.salesforce.dataloader.action.visitor.BulkV2Connection;
-import com.salesforce.dataloader.config.Config;
+import com.salesforce.dataloader.action.visitor.bulk.BulkV2Connection;
 import com.salesforce.dataloader.config.Messages;
 import com.salesforce.dataloader.controller.Controller;
 import com.sforce.async.AsyncApiException;
 import com.sforce.ws.ConnectorConfig;
 
-public class BulkV2Client extends ClientBase<BulkV2Connection> {
+public class BulkV2Client extends RESTClient<BulkV2Connection> {
     private static Logger LOG = LogManager.getLogger(BulkV2Client.class);
-    private BulkV2Connection client;
-    private ConnectorConfig connectorConfig = null;
 
     public BulkV2Client(Controller controller) {
         super(controller, LOG);
-    }
-    
-    public BulkV2Connection getConnection() {
-        return client;
     }
     
     @Override
     protected boolean connectPostLogin(ConnectorConfig cc) {
         try {
             // Set up a connection object with the given config
-            this.client = new BulkV2Connection(cc, controller);
-
+            setConnection(new BulkV2Connection(cc, controller));
         } catch (AsyncApiException e) {
             logger.error(Messages.getMessage(getClass(), "loginError", cc.getAuthEndpoint(), e.getExceptionMessage()),
                     e);
@@ -63,27 +55,12 @@ public class BulkV2Client extends ClientBase<BulkV2Connection> {
         return true;
     }
 
-    public synchronized ConnectorConfig getConnectorConfig() {
-        if (this.connectorConfig == null || !this.config.getBoolean(Config.REUSE_CLIENT_CONNECTION)) {
-            this.connectorConfig = super.getConnectorConfig();
-            
-            // override the restEndpoint value set in the superclass
-            String server = getSession().getServer();
-            if (server != null) {
-                this.connectorConfig.setRestEndpoint(server + getServicePath());
-            }
-            this.connectorConfig.setTraceMessage(config.getBoolean(Config.WIRE_OUTPUT));
-        }
-        return this.connectorConfig;
+    public static String getServicePath() {
+        return  "/services/data/v" + getAPIVersionForTheSession() + "/jobs/";
     }
-    
-    protected static String getServicePath() {
-        String[] pathPartArray = BULKV2_ENDPOINT_PATH.split("\\/");
-        pathPartArray[pathPartArray.length-2] = "v" + getAPIVersion();
-        StringBuffer buf = new StringBuffer();
-        for (int i = 0; i < pathPartArray.length; i++) {
-            buf.append(pathPartArray[i] + "/");
-        }
-        return buf.toString();
+
+    @Override
+    public String getServiceURLPath() {
+        return getServicePath();
     }
 }
